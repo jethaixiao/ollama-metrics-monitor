@@ -1,0 +1,10 @@
+客户端 (DSH / WorkBuddy / 脚本)
+        │  OpenAI 兼容 /v1  ·  Ollama 原生 /api
+        ▼
+   Metrics Proxy  :11437
+   ─────────────────────
+   转发 · 解析 token/耗时 · 写 SQLite
+   提供看板 · OpenAI 兼容层 · 数据导出
+        │
+        ▼
+     Ollama  :11434

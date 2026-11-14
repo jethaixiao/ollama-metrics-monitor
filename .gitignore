@@ -1,0 +1,56 @@
+# ===== 配置与凭据（绝不入库）=====
+config.env
+.env
+.env.*
+*.key
+*.pem
+*.p12
+*.keystore
+credentials*.json
+secrets*.yml
+secrets*.yaml
+*.env
+*secret*
+*credential*
+*token*
+
+# ===== 运行时数据 =====
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.log
+logs/
+
+# ===== 环境与构建产物 =====
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+node_modules/
+.pip-error.log
+
+# ===== 编辑器与系统 =====
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
+*.bak
+*.orig
+*.rej
+*copy*
+
+# ===== 压缩包与生成物（大文件）=====
+*.zip
+*.tar.gz
+*.tgz
+*.7z
+*.docx
+*.pdf

@@ -1,0 +1,741 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ollama Metrics Dashboard</title>
+    <script src="/chart.js"></script>
+    <style>
+        :root{color-scheme:light;--bg-page:#F0F2F3;--surface:#FFF;--surface-sunken:#E9ECEE;--border:#E3E6E8;--border-strong:#CFD4D8;--text-1:#111418;--text-2:#565E65;--text-3:#6E767D;--accent:#C2410C;--accent-weak:#FDF0E7;--accent-ink:#7C2A08;--ok:#0F7B4F;--warn:#9A6700;--danger:#B42318;--series-1:#111418;--grid:rgba(17,20,24,.07);--sh-2:0 4px 12px -2px rgba(16,20,24,.10);--space-1:4px;--space-2:8px;--space-3:12px;--space-4:16px;--space-5:20px;--space-6:24px;--space-8:32px;--r-chip:4px;--r-btn:6px;--r-code:8px;--r-card:12px;--r-full:999px}
+        html.dark{color-scheme:dark;--bg-page:#0C0E10;--surface:#15181B;--surface-sunken:#101315;--surface-raised:#1C2024;--border:#242A2E;--border-strong:#333A3F;--text-1:#EDEFF1;--text-2:#9BA4AB;--text-3:#78828A;--accent:#FB8C3C;--accent-weak:#2A1A10;--accent-ink:#FFC79E;--ok:#3DD68C;--warn:#E0B341;--danger:#F8827A;--series-1:#DDE2E6;--grid:rgba(237,239,241,.08);--sh-2:inset 0 1px 0 rgba(255,255,255,.04)}
+        *{margin:0;padding:0;box-sizing:border-box}
+        body{font-family:ui-sans-serif,-apple-system,"SF Pro Text","PingFang SC",sans-serif;background:var(--bg-page);color:var(--text-1);line-height:1.6;font-variant-numeric:tabular-nums;transition:background-color .12s,color .12s,border-color .12s}
+        .container{max-width:1280px;margin:0 auto;padding:0 var(--space-8)}
+        @media(max-width:1279px){.container{padding:0 var(--space-6)}}@media(max-width:767px){.container{padding:0 var(--space-4)}}
+        .text-kpi{font-size:40px;font-weight:600;line-height:1.05;letter-spacing:-.03em}.text-label{font-size:13px;font-weight:600;line-height:1.4;color:var(--text-2)}.text-meta{font-size:12px;font-weight:400;line-height:1.5;color:var(--text-3)}.text-table{font-size:16px;font-weight:500;line-height:1.4;letter-spacing:-.01em}.text-th{font-size:12px;font-weight:500;line-height:1.4;color:var(--text-3)}.text-chip{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:11px;font-weight:500;line-height:1}.text-code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:12px;line-height:1.7}
+        .topbar{height:56px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border);background:var(--surface);position:sticky;top:0;z-index:100;padding:0 var(--space-6)}.topbar-title{font-size:14px;font-weight:600}.topbar-meta{font-size:12px;color:var(--text-3);display:flex;align-items:center;gap:var(--space-4)}.topbar-actions{display:flex;align-items:center;gap:var(--space-2)}
+        .btn{height:32px;padding:0 14px;border-radius:var(--r-btn);font-size:13px;font-weight:500;cursor:pointer;border:1px solid transparent;display:inline-flex;align-items:center;gap:6px;white-space:nowrap;transition:background-color .12s,border-color .12s,color .12s,transform .08s}.btn-primary{background:var(--accent);color:#fff}.btn-primary:hover{background:var(--accent-ink)}.btn-primary:active{transform:translateY(1px)}.btn-secondary{background:var(--surface);border-color:var(--border);color:var(--text-2)}.btn-secondary:hover{background:var(--surface-sunken);color:var(--text-1);border-color:var(--border-strong)}.icon-btn{width:32px;height:32px;border-radius:var(--r-btn);border:none;background:transparent;color:var(--text-2);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background-color .12s,color .12s}.icon-btn:hover{background:var(--surface-sunken);color:var(--text-1)}.icon-btn svg{width:16px;height:16px;stroke:currentColor;stroke-width:1.5;fill:none}.btn:disabled{opacity:.5;cursor:not-allowed;transform:none!important}
+        .section{margin-top:var(--space-8)}
+.view-tabs{display:flex;gap:var(--space-5);border-bottom:1px solid var(--border);margin-top:var(--space-5);position:sticky;top:56px;background:var(--bg-page);z-index:90;padding-top:var(--space-2)}
+.view-tab{padding:var(--space-3) 0;border:none;background:transparent;font-size:13px;font-weight:500;color:var(--text-3);cursor:pointer;position:relative;transition:color .12s}
+.view-tab:hover{color:var(--text-1)}
+.view-tab.active{color:var(--accent);font-weight:600}
+.view-tab.active::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:2px;background:var(--accent)}
+.panel{display:block}
+.bk-row{display:flex;align-items:center;gap:var(--space-3);padding:var(--space-2) 0;border-bottom:1px solid var(--border)}
+.bk-row:last-child{border-bottom:none}
+.bk-meta{width:190px;flex:0 0 190px;font-size:12px;color:var(--text-2)}
+.bk-meta b{display:block;font-size:13px;color:var(--text-1)}
+.bk-bar{flex:1;display:flex;height:22px;border-radius:var(--r-chip);overflow:hidden;background:var(--surface-sunken);min-width:0}
+.bk-seg{height:100%}
+.bk-total{width:64px;flex:0 0 64px;text-align:right;font-size:13px;font-weight:600}
+.bk-legend{display:flex;flex-wrap:wrap;gap:var(--space-4);margin-top:var(--space-3);font-size:11.5px;color:var(--text-3)}
+.bk-legend i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:4px}
+.panel[hidden]{display:none}.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-card);padding:var(--space-5)}.card-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-4)}
+        /* Narrative Banner */
+        .narrative-banner{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-card);padding:var(--space-4) var(--space-5);display:flex;align-items:center;gap:var(--space-3);margin-top:var(--space-6)}
+        .narrative-icon{width:24px;height:24px;border-radius:var(--r-full);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:14px}
+        .narrative-icon.ok{background:var(--ok);color:#fff}.narrative-icon.warn{background:var(--warn);color:#fff}.narrative-icon.danger{background:var(--danger);color:#fff}
+        .narrative-text{font-size:13px;font-weight:500;color:var(--text-1);flex:1;line-height:1.5}
+        .narrative-text .highlight{color:var(--accent);font-weight:600}
+        /* KPI Strip */
+        .kpi-strip{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid var(--border);border-radius:var(--r-card);overflow:hidden;background:var(--surface)}.kpi-cell{padding:var(--space-5);border-right:1px solid var(--border);display:flex;flex-direction:column;justify-content:center}.kpi-cell:last-child{border-right:none}.kpi-delta{font-size:12px;font-weight:500;margin-top:4px}.delta-up{color:var(--ok)}.delta-down{color:var(--danger)}.delta-none{color:var(--text-3)}
+        @media(max-width:1023px){.kpi-strip{grid-template-columns:repeat(2,1fr)!important}}@media(max-width:767px){.kpi-strip{grid-template-columns:1fr!important}}
+        /* Charts */
+        .chart-wrap{position:relative;height:280px}.chart-wrap-sm{position:relative;height:220px}
+        /* Horizontal Bar Ranking */
+        .h-bar-row{display:flex;align-items:center;gap:var(--space-3);padding:var(--space-2) 0;border-bottom:1px solid var(--border)}.h-bar-row:last-child{border-bottom:none}.h-bar-label{width:140px;font-size:12px;color:var(--text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.h-bar-track{flex:1;height:8px;background:var(--surface-sunken);border-radius:var(--r-full);overflow:hidden}.h-bar-fill{height:100%;background:var(--series-1);border-radius:var(--r-full)}.h-bar-value{width:60px;text-align:right;font-size:12px;font-weight:500;color:var(--text-1)}.h-bar-sub{width:70px;text-align:right;font-size:11px;color:var(--text-3)}
+        /* Table */
+        .table-wrap{overflow-x:visible}table{width:100%;border-collapse:collapse;table-layout:fixed}th{padding:var(--space-3) var(--space-4);text-align:left;font-size:12px;font-weight:500;color:var(--text-3);border-bottom:1px solid var(--border)}td{padding:var(--space-3) var(--space-4);border-bottom:1px solid var(--border);font-size:16px;font-weight:500;color:var(--text-1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;transition:background-color .12s}tr:hover td{background:var(--surface-sunken)}tr:last-child td{border-bottom:none}.num-col{text-align:right}
+        /* Chip & Status */
+        .chip{display:inline-block;padding:2px 6px;background:var(--surface-sunken);border-radius:var(--r-chip);font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:11px;font-weight:500;color:var(--text-2);max-width:100%;overflow:hidden;text-overflow:ellipsis}.status{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:500}.status-dot{width:6px;height:6px;border-radius:var(--r-full)}.status-ok .status-dot{background:var(--ok)}.status-ok{color:var(--ok)}.status-err .status-dot{background:var(--danger)}.status-err{color:var(--danger)}
+.status-warn .status-dot{background:var(--warn)}.status-warn{color:var(--warn)}
+        /* API Section */
+        .section.api-section{margin-top:var(--space-5)}
+.api-section details{border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:var(--r-card);background:var(--surface)}
+.api-section summary{height:52px;padding:0 var(--space-5);display:flex;align-items:center;gap:var(--space-2);cursor:pointer;font-size:14px;font-weight:600;color:var(--text-1);list-style:none;position:relative}
+.api-bolt{width:16px;height:16px;stroke:var(--accent);fill:none;stroke-width:1.8;flex-shrink:0}
+.api-title{font-size:14px;font-weight:600;color:var(--text-1)}
+.field-hints{margin:0 0 var(--space-3);font-size:12px;line-height:1.9;color:var(--text-2)}
+.field-hints>div{display:flex;gap:var(--space-3);align-items:baseline}
+.field-hints dt{width:60px;flex:0 0 60px;color:var(--text-3)}
+.field-hints dd{margin:0;flex:1;min-width:0;overflow-wrap:anywhere}
+.field-hints code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:11.5px;background:var(--surface-sunken);border-radius:var(--r-chip);padding:1px 5px;color:var(--accent);white-space:nowrap}
+.field-hints code.url{white-space:normal;overflow-wrap:anywhere}
+.field-hints code.cli{white-space:pre-wrap;overflow-wrap:anywhere;word-break:normal}
+.field-hints code+code{margin-left:var(--space-2)}
+.fh-note{color:var(--text-3);margin-left:var(--space-3);font-size:11.5px}
+.mini-btn{height:22px;padding:0 8px;margin-left:8px;border:1px solid var(--border-strong);background:var(--surface);border-radius:var(--r-chip);font-size:11px;color:var(--text-2);cursor:pointer}
+.mini-btn:hover{background:var(--surface-sunken);color:var(--text-1)}
+.fh-note::before{content:"· ";color:var(--border-strong)}
+
+.api-subtitle{font-size:12px;font-weight:400;color:var(--text-3);margin-left:var(--space-2)}
+@media(max-width:960px){.api-subtitle{display:none}}
+.api-section summary::-webkit-details-marker{display:none}.api-section summary::after{content:"";position:absolute;right:var(--space-5);width:16px;height:16px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23565E65' stroke-width='1.5'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");transition:transform .2s}.api-section details[open] summary::after{transform:rotate(180deg)}.api-content{padding:var(--space-5);border-top:1px solid var(--border)}.api-url-row{display:flex;align-items:center;gap:var(--space-3);background:var(--surface-sunken);border-radius:var(--r-btn);padding:var(--space-2) var(--space-3);margin-bottom:var(--space-4)}.api-url-row code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:12px;color:var(--accent);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.code-block{background:var(--surface-sunken);border-radius:var(--r-code);padding:var(--space-3) var(--space-4);overflow:auto;margin-bottom:var(--space-3);max-height:200px}.code-block code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:12px;line-height:1.7;color:var(--text-1);white-space:pre}.tab-bar{display:flex;gap:var(--space-4);border-bottom:1px solid var(--border);margin-bottom:var(--space-4)}.tab-btn{padding:var(--space-2) 0;border:none;background:transparent;font-size:13px;font-weight:500;color:var(--text-3);cursor:pointer;position:relative}.tab-btn.active{color:var(--accent)}.tab-btn.active::after{content:"";position:absolute;bottom:-1px;left:0;right:0;height:2px;background:var(--accent)}.tab-content{display:none}.tab-content.active{display:block}.note-list{display:flex;flex-direction:column;gap:var(--space-2)}.note-item{display:flex;align-items:flex-start;flex-wrap:wrap;gap:var(--space-1) var(--space-2);font-size:12px;color:var(--text-2);padding:var(--space-2) var(--space-3);background:var(--surface-sunken);border-radius:var(--r-btn)}.note-item code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:11px;padding:1px 4px;background:var(--surface);border-radius:var(--r-chip);color:var(--accent);white-space:nowrap}
+        /* Skeleton */
+        .skeleton{background:linear-gradient(90deg,var(--surface-sunken) 25%,var(--border) 50%,var(--surface-sunken) 75%);background-size:200% 100%;animation:shimmer 1.5s infinite;border-radius:var(--r-btn)}@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}.skel-text{height:16px;margin-bottom:8px}.skel-kpi{height:40px;width:120px;margin-bottom:4px}
+        /* Toast */
+        .toast{position:fixed;bottom:20px;right:20px;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-btn);padding:10px 16px;box-shadow:var(--sh-2);font-size:13px;display:flex;align-items:center;gap:8px;z-index:1000;transform:translateY(80px);opacity:0;transition:transform .2s,opacity .2s}.toast.show{transform:translateY(0);opacity:1}
+        /* Detail Overlay */
+        .detail-overlay{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:200;display:none;align-items:center;justify-content:center}.detail-overlay.open{display:flex}.detail-panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-card);width:90%;max-width:720px;max-height:85vh;overflow-y:auto;padding:var(--space-6);box-shadow:var(--sh-2);position:relative}.detail-close{position:absolute;top:var(--space-4);right:var(--space-4);width:28px;height:28px;border:none;background:var(--surface-sunken);border-radius:var(--r-btn);cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--text-2)}.detail-close:hover{background:var(--border)}.detail-close svg{width:14px;height:14px;stroke:currentColor;stroke-width:2;fill:none}.detail-title{font-size:16px;font-weight:600;margin-bottom:var(--space-4);padding-right:32px}.detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:var(--space-4);margin-bottom:var(--space-4)}.detail-item{padding:var(--space-3);background:var(--surface-sunken);border-radius:var(--r-btn)}.detail-item-label{font-size:11px;color:var(--text-3);margin-bottom:2px}.detail-item-value{font-size:16px;font-weight:600;font-variant-numeric:tabular-nums}.detail-bar-section{margin-top:var(--space-4)}.detail-bar-row{display:flex;align-items:center;gap:var(--space-2);margin-bottom:var(--space-2)}.detail-bar-label{width:80px;font-size:12px;color:var(--text-2);text-align:right}.detail-bar-track{flex:1;height:12px;background:var(--border);border-radius:var(--r-full);overflow:hidden}.detail-bar-fill{height:100%;border-radius:var(--r-full);transition:width .3s}.detail-bar-value{width:60px;font-size:12px;font-weight:500;text-align:right}.detail-context{margin-top:var(--space-4);padding:var(--space-3);background:var(--accent-weak);border-radius:var(--r-btn);font-size:12px;color:var(--accent-ink);line-height:1.6}.detail-context strong{font-weight:600}@media(max-width:600px){.detail-grid{grid-template-columns:1fr}.detail-panel{width:95%;padding:var(--space-4)}}
+        /* Focus & Motion */
+        :focus-visible{outline:2px solid var(--accent);outline-offset:2px}@media(prefers-reduced-motion:reduce){.skeleton{animation:none}*{transition-duration:.01ms!important}}
+        /* Responsive */
+        @media(max-width:1023px){.col-split{grid-template-columns:1fr!important}}.col-split{display:grid;grid-template-columns:8fr 4fr;gap:var(--space-4)}@media(max-width:767px){.h-bar-label{width:100px}.h-bar-sub{display:none}}
+
+        /* ============ 手机端（≤640px）============ */
+        @media (max-width:640px){
+            .topbar{height:auto;min-height:52px;padding:8px 12px;gap:8px;flex-wrap:nowrap}
+            .topbar-title{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:40vw}
+            #lastUpdate{display:none}
+            .topbar-meta{gap:6px}
+            .btn{height:30px;padding:0 10px;font-size:12px}
+            .btn svg{display:none}
+            .icon-btn{width:30px;height:30px}
+            .container{padding:0 12px}
+            .section{margin-top:18px}
+            .card{padding:14px}
+            .card-header{flex-wrap:wrap;gap:2px 8px}
+
+            /* KPI 改 2×2，字号收小，别占一屏 */
+            .kpi-strip{grid-template-columns:1fr 1fr!important}
+            .kpi-cell{padding:14px 12px}
+            .kpi-cell .text-kpi{font-size:26px;letter-spacing:-.02em}
+
+            .narrative-banner{padding:12px;align-items:flex-start}
+            .narrative-text{font-size:12.5px;line-height:1.55}
+
+            /* 字段表改上下结构，长地址强制断行 */
+            .field-hints>div{display:block;padding:3px 0}
+            .field-hints dt{width:auto;margin-bottom:1px}
+            .field-hints code{word-break:normal}
+            .fh-note{display:block;margin-left:0;margin-top:2px}
+            .fh-note::before{content:""}
+            .api-subtitle{display:none}
+            .api-url-row{flex-wrap:nowrap;gap:8px}
+            .api-url-row code{white-space:normal;overflow-wrap:anywhere;flex:1 1 auto;min-width:0;font-size:11.5px}
+            .api-url-row .btn{flex:0 0 auto;height:28px;padding:0 10px;font-size:12px}
+            .code-block{max-height:180px}
+            .code-block{overflow-x:auto}
+            .note-item{font-size:11.5px}
+            .note-item code{word-break:break-all}
+
+            /* 图表降高，刻度减少 */
+            .chart-wrap{height:210px}
+            .chart-wrap-sm{height:170px}
+            .h-bar-label{width:78px;font-size:11px}
+            .h-bar-value{width:44px}
+            .h-bar-sub{display:none}
+
+            /* 表格只留 模型 / 耗时 / 状态 */
+            table col:nth-child(3),table col:nth-child(5),
+            table th:nth-child(3),table th:nth-child(5),
+            table td:nth-child(3),table td:nth-child(5){display:none}
+            th{padding:8px 6px;font-size:11px}
+            td{padding:10px 6px;font-size:13px}
+            .chip{font-size:10.5px}
+
+            /* 详情弹窗 */
+            .detail-panel{width:96%;max-height:88vh;padding:16px}
+            .detail-title{font-size:14px}
+            .detail-item{padding:10px}
+            .detail-item-value{font-size:14px}
+            .detail-bar-label{width:62px;font-size:11px}
+            .detail-bar-value{width:52px;font-size:11px}
+        }
+    </style>
+</head>
+<body>
+    <header class="topbar">
+        <div style="display:flex;align-items:center;gap:var(--space-4)"><span class="topbar-title">Ollama Metrics Dashboard</span></div>
+        <div class="topbar-meta">
+            <span id="lastUpdate">更新于 --:--:--</span>
+            <div class="topbar-actions">
+                <button class="btn btn-primary" id="refreshBtn" onclick="loadData()"><svg viewBox="0 0 24 24"><path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>刷新</button>
+                <button class="btn btn-secondary" data-local-only onclick="exportData('csv')" title="导出全部请求记录为 CSV（Excel 可打开）"><svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>导出</button>
+                <button class="btn btn-secondary" data-local-only onclick="confirmReset()" title="清除所有数据，开始新一轮统计"><svg viewBox="0 0 24 24"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>清除</button>
+                <button class="icon-btn" onclick="toggleTheme()" title="切换主题" id="themeBtn"><svg viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg></button>
+            </div>
+        </div>
+    </header>
+    <main class="container">
+        <nav class="view-tabs" role="tablist">
+            <button class="view-tab active" role="tab" data-view="monitor" onclick="switchView('monitor')">监控</button>
+            <button class="view-tab" role="tab" data-view="usage" onclick="switchView('usage')">接入指引</button>
+        </nav>
+        <section class="panel" id="panel-monitor">
+        <!-- Narrative Banner -->
+
+        <div class="narrative-banner" id="narrativeBanner">
+            <div class="skeleton" style="width:24px;height:24px;border-radius:999px"></div>
+            <div class="skeleton skel-text" style="flex:1;height:16px"></div>
+        </div>
+        <!-- KPI Strip -->
+        <div class="section"><div class="kpi-strip" id="kpiStrip"><div class="kpi-cell"><div class="skeleton skel-text" style="width:60px"></div><div class="skeleton skel-kpi"></div><div class="skeleton skel-text" style="width:80px"></div></div><div class="kpi-cell"><div class="skeleton skel-text" style="width:60px"></div><div class="skeleton skel-kpi"></div><div class="skeleton skel-text" style="width:80px"></div></div><div class="kpi-cell"><div class="skeleton skel-text" style="width:60px"></div><div class="skeleton skel-kpi"></div><div class="skeleton skel-text" style="width:80px"></div></div><div class="kpi-cell"><div class="skeleton skel-text" style="width:60px"></div><div class="skeleton skel-kpi"></div><div class="skeleton skel-text" style="width:80px"></div></div></div></div>
+        <!-- Main Chart + Model Ranking -->
+        <div class="section col-split">
+            <div class="card">
+                <div class="card-header"><span class="text-label">请求趋势 · 近 2 小时（5 分钟粒度）</span><span class="text-meta" id="trendBadge">加载中</span></div>
+                <div class="chart-wrap"><canvas id="trendChart" role="img" aria-label="近2小时请求与GPU趋势"></canvas></div>
+                <div class="text-meta" style="margin-top:8px" id="chartSummary"></div>
+            </div>
+            <div class="card">
+                <div class="card-header"><span class="text-label">模型排名</span><span class="text-meta" id="modelBadge">加载中</span></div>
+                <div id="modelRanking"><div class="skeleton skel-text" style="height:24px;margin-bottom:12px"></div><div class="skeleton skel-text" style="height:24px;margin-bottom:12px"></div><div class="skeleton skel-text" style="height:24px"></div></div>
+            </div>
+        </div>
+        <!-- Recent Requests Table -->
+        <div class="section"><div class="card"><div class="card-header"><span class="text-label">最近请求（按异常分数排序）</span><span class="text-meta" id="tableBadge">加载中</span></div><div class="table-wrap"><table><colgroup><col style="width:13%"><col style="width:32%"><col style="width:11%"><col style="width:13%"><col style="width:12%"><col style="width:19%"></colgroup><thead><tr><th>时间</th><th>模型</th><th class="num-col">输出</th><th class="num-col">耗时</th><th class="num-col">tok/s</th><th>判定</th></tr></thead><tbody id="recentTableBody"><tr><td colspan="6" style="text-align:center;padding:40px;color:var(--text-3)">加载中...</td></tr></tbody></table></div></div></div>
+        <!-- GPU Resource Monitor -->
+        <div class="section"><div class="card"><div class="card-header"><span class="text-label">最慢的 5 次请求 · 耗时拆解</span><span class="text-meta">慢在加载、排队，还是真的在算？</span></div><div id="slowBreakdown"></div></div></div>
+
+        <div class="section"><div class="card"><div class="card-header"><span class="text-label" id="resTitle">资源监控（每 5 秒采样 · 窗口 30 分钟 · 含统计基线）</span><span class="text-meta" id="gpuLabel">-</span></div><div class="chart-wrap-sm"><canvas id="gpuChart" role="img" aria-label="资源利用率趋势与统计基线"></canvas></div><div class="text-meta" id="resSummary" style="margin-top:8px"></div></div></div>
+        <!-- API Quick Start -->
+
+        </section>
+
+        <section class="panel" id="panel-usage" hidden>
+        <div class="section api-section"><details open><summary><svg class="api-bolt" viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z"/></svg><span class="api-title">怎么用这个看板</span><span class="api-subtitle">客户端里填下面这四项，调用就会自动被统计</span></summary><div class="api-content"><div class="api-url-row"><code id="apiUrlCode">__BASE__/v1/chat/completions</code><button class="btn btn-secondary" onclick="copyApiUrl()">复制</button></div><dl class="field-hints">
+<div><dt>本机地址</dt><dd><code class="url">__LOCAL_BASE__</code><span class="fh-note">跑在这台机器上的 DSH / 脚本用这个，不需要 Token</span></dd></div>
+<div><dt>公网地址</dt><dd><code class="url">__BASE__/v1</code><span class="fh-note">别的设备用这个，必须带 Token；只收完整路径时填 <code class="url">__BASE__/v1/chat/completions</code></span></dd></div>
+<div><dt>模型名称</dt><dd><code>qwen2.5:7b</code> <code>qwen3:14b</code> <code>qwen3:14b-abliterated</code> <code>deepseek-r1:14b</code><span class="fh-note">必须是 ollama list 里的全名</span></dd></div>
+<div><dt>API Token</dt><dd><code id="apiToken" class="mono-token">__ACCESS_CODE__</code><button class="mini-btn" onclick="copyToken()">复制</button><span class="fh-note">客户端里的 API Key 字段就填这串；公网调用放 Authorization: Bearer；页面登录用的也是它</span></dd></div>
+<div><dt>命令行</dt><dd><code class="cli">curl -s __BASE__/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer __ACCESS_CODE__' \
+  -H 'ngrok-skip-browser-warning: true' \
+  -d '{"model":"qwen2.5:7b","messages":[{"role":"user","content":"hi"}]}'</code></dd></div>
+</dl><div class="tab-bar"><button class="tab-btn active" onclick="switchApiTab('python')">Python</button><button class="tab-btn" onclick="switchApiTab('js')">JavaScript</button><button class="tab-btn" onclick="switchApiTab('curl')">cURL</button></div><div class="tab-content active" id="tab-python"><div class="code-block"><code>import requests
+resp = requests.post(
+    "__BASE__/v1/chat/completions",
+    headers={"Content-Type":"application/json",
+        "Authorization":"Bearer __ACCESS_CODE__",
+        "ngrok-skip-browser-warning":"true"},
+    json={"model":"qwen2.5:7b","messages":[
+        {"role":"user","content":"你好"}],"temperature":0.7})
+print(resp.json())</code></div></div><div class="tab-content" id="tab-js"><div class="code-block"><code>const r = await fetch(
+  "__BASE__/v1/chat/completions",{
+  method:"POST",headers:{"Content-Type":"application/json",
+  "Authorization":"Bearer __ACCESS_CODE__",
+  "ngrok-skip-browser-warning":"true"},
+  body:JSON.stringify({model:"qwen2.5:7b",
+  messages:[{role:"user",content:"你好"}],temperature:0.7})});
+console.log(await r.json());</code></div></div><div class="tab-content" id="tab-curl"><div class="code-block"><code>curl -X POST \
+  "__BASE__/v1/chat/completions" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer __ACCESS_CODE__" \
+  -H "ngrok-skip-browser-warning: true" \
+  -d '{"model":"qwen2.5:7b","messages":[{"role":"user","content":"你好"}],"temperature":0.7}'</code></div></div><div class="note-list"><div class="note-item">⚠️ 首次浏览器访问可能弹 ngrok 警告页，点击 <strong>"Visit Site"</strong></div><div class="note-item">🔑 API 调用需加 header：<code>ngrok-skip-browser-warning: true</code></div></div></div></details></div>
+        </section>
+    </main>
+    <div class="toast" id="toast"><span id="toastIcon">✅</span><span id="toastMsg">已更新</span></div>
+    <div class="detail-overlay" id="detailOverlay" onclick="if(event.target===this)closeDetail()"><div class="detail-panel"><button class="detail-close" onclick="closeDetail()"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button><div class="detail-title" id="detailTitle">请求详情</div><div class="detail-grid" id="detailGrid"></div><div class="detail-bar-section" id="detailBars"></div><div class="detail-context" id="detailContext"></div></div></div>
+    <script>
+        let trendChart=null,gpuChart=null,lastData=null;const METRICS_URL='/metrics';let lastSuccessTime=null,refreshController=null;
+        function toggleTheme(){const h=document.documentElement,b=document.getElementById('themeBtn');if(h.classList.contains('dark')){h.classList.remove('dark');b.innerHTML='<svg viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';localStorage.setItem('theme','light')}else{h.classList.add('dark');b.innerHTML='<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>';localStorage.setItem('theme','dark')}updateChartColors()}
+        (function(){const s=localStorage.getItem('theme');if(s==='dark'){document.documentElement.classList.add('dark');document.getElementById('themeBtn').innerHTML='<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>'}})();
+        function showToast(msg,ok=true){const t=document.getElementById('toast');document.getElementById('toastIcon').textContent=ok?'✅':'❌';document.getElementById('toastMsg').textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2500)}
+        // 所有进入 innerHTML 的动态数据都必须过这里
+        function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+
+        function fmtToken(n){if(n==null)return'-';if(n>=1e6)return(n/1e6).toFixed(1)+'M';if(n>=1e4)return(n/1e3).toFixed(0)+'K';return n.toLocaleString()}
+        function fmtCost(n){if(n==null)return'-';if(n>=100)return'¥'+n.toFixed(2);if(n>=1)return'¥'+n.toFixed(3);return'¥'+n.toFixed(3)}
+        function fmtMs(n){if(n==null)return'-';if(n>=1000)return(n/1000).toFixed(1)+'s';return Math.round(n)+'ms'}
+        async function loadData(){const btn=document.getElementById('refreshBtn');if(btn.disabled)return;btn.disabled=true;btn.innerHTML='<svg viewBox="0 0 24 24" style="animation:spin 1s linear infinite"><path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16"/></svg> 刷新中…';if(refreshController)refreshController.abort();refreshController=new AbortController();try{let r=await fetch(METRICS_URL,{signal:refreshController.signal});if(!r.ok&&(r.status===404||r.status===502)){r=await fetch(window.location.origin+METRICS_URL,{signal:refreshController.signal})}if(!r.ok)throw new Error(`HTTP ${r.status}`);const d=await r.json();render(d);lastSuccessTime=new Date();document.getElementById('lastUpdate').style.color='';updateTimestamp()}catch(e){if(e.name!=='AbortError'){console.error(e);showToast('刷新失败','error');if(lastSuccessTime){document.getElementById('lastUpdate').style.color='var(--warn)';document.getElementById('lastUpdate').textContent+=` · ${e.message}`}}}finally{btn.disabled=false;btn.innerHTML='<svg viewBox="0 0 24 24"><path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16"/></svg> 刷新'}}
+        function updateTimestamp(){const el=document.getElementById('lastUpdate');if(!lastSuccessTime){el.textContent='更新于 --:--:--';return}const now=new Date(),diff=(now-lastSuccessTime)/1000;el.style.color=diff>90?'var(--warn)':'var(--text-3)';el.textContent=`更新于 ${lastSuccessTime.toLocaleTimeString('zh-CN',{hour12:false})}${diff>90?' ⚠️ 数据过期':''}`}
+        
+        // GPU 数值翻译：0.x% 的差异对人没意义，只有"闲/忙"两档可读
+        let _gpuReal = false;   // true = 硬件 GPU 计数器；false = CPU 近似
+        function gpuPhrase(v){
+            const label = _gpuReal ? 'GPU' : '推理进程';
+            if(!isFinite(v) || v < 2) return _gpuReal ? 'GPU 空闲' : '推理进程空闲';
+            if(v < 30) return `${label} 轻载 ${v.toFixed(0)}%`;
+            if(v < 80) return `${label} 负载 ${v.toFixed(0)}%`;
+            return `${label} 高负载 ${v.toFixed(0)}%（接近跑满）`;
+        }
+
+        // === NARRATIVE ENGINE ===
+        function generateNarrative(d){
+            const c=d.cumulative||{},fm=d.five_min_stats||[],gpu=d.gpu_stats||[],lp=d.latency_percentiles||{};
+            if(!fm.length&&!gpu.length)return{level:'ok',text:'系统初始化中，等待数据采集...'};
+            
+            // Filter out timeout noise from request counts
+            const validRequests=fm.slice(-24).reduce((a,b)=>a+(b.request_count||0),0);  // 近 2 小时实际请求数
+            
+            // Analyze recent 5-min windows
+            const recentWins=fm.slice(-6);
+            const totalRecent=recentWins.reduce((a,b)=>a+b.request_count,0);
+            const avgReqPerWin=recentWins.length?totalRecent/recentWins.length:0;
+            const spikeWin=recentWins.find(w=>w.request_count>avgReqPerWin*2&&w.request_count>1);
+            
+            // Analyze GPU anomalies (only high load)
+            const recentGpu=gpu.slice(-24);
+            const anomalyGpu=recentGpu.length>=30?recentGpu.find(g=>g.z_score>2&&g.gpu_utilization_pct>10):null;
+            const avgGpu=recentGpu.length?recentGpu.reduce((a,b)=>a+b.gpu_utilization_pct,0)/recentGpu.length:0;
+            
+            // Latency check (exclude timeouts)
+            const validLp={p95:lp.p95<299000?lp.p95:0,p99:lp.p99<299000?lp.p99:0,count:lp.count||0};
+            const highLatency=validLp.count>=5&&validLp.p95>5000&&validLp.p95<299000;
+            
+            if(anomalyGpu){
+                return{level:'danger',text:`<span class="highlight">GPU 异常</span> · ${new Date(anomalyGpu.timestamp).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})} GPU 利用率 ${anomalyGpu.gpu_utilization_pct.toFixed(1)}%（Z=${anomalyGpu.z_score.toFixed(1)}），显著偏离基线 ${anomalyGpu.rolling_mean.toFixed(1)}%±${anomalyGpu.rolling_stddev.toFixed(1)}%`};
+            }
+            if(spikeWin){
+                const t=new Date(spikeWin.window_start+'Z').toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'});
+                return{level:'warn',text:`<span class="highlight">${t} 流量突增</span> · 该窗口 ${spikeWin.request_count} 次请求（均值 ${avgReqPerWin.toFixed(1)}），窗口峰值 ${fmtMs(spikeWin.max_response_time_ms||spikeWin.p95_response_time_ms)}`};
+            }
+            if(highLatency){
+                return{level:'warn',text:`<span class="highlight">延迟偏高</span> · P95 ${fmtMs(validLp.p95)} / P99 ${fmtMs(validLp.p99)}，近 2h 共 ${validRequests} 次有效请求，${gpuPhrase(avgGpu)}`};
+            }
+            return{level:'ok',text:`系统正常 · 近 2h 共 ${validRequests} 次有效请求，P95 延迟 ${fmtMs(validLp.p95)}，${gpuPhrase(avgGpu)}${validLp.count<5?'（样本较少，仅供参考）':'，无异常波动'}`};
+        }
+        
+        function render(d){
+            lastData=d;
+            _gpuReal = (d.gpu_source === 'ioreg');
+            const rt = document.getElementById('resTitle');
+            if(rt){
+                rt.innerHTML = _gpuReal
+                    ? '资源监控 · GPU 利用率 <span style="font-weight:400;color:var(--text-3)">（每 5 秒采样 · 窗口 30 分钟 · 含统计基线）</span>'
+                    : '资源监控 · 推理进程 CPU <span style="font-weight:400;color:var(--text-3)">（未读到 GPU 计数器，已降级为近似值）</span>';
+            }
+            const c=d.cumulative||{},lp=d.latency_percentiles||{};
+            window._gpuStats=d.gpu_stats||[];window._fiveMinStats=d.five_min_stats||[];
+            
+            // Narrative
+            const narrative=generateNarrative(d);
+            const banner=document.getElementById('narrativeBanner');
+            banner.innerHTML=`<div class="narrative-icon ${narrative.level}">${narrative.level==='ok'?'✓':narrative.level==='warn'?'⚠':'✕'}</div><div class="narrative-text">${narrative.text}</div>`;
+            
+            // KPI
+            document.getElementById('kpiStrip').innerHTML=`
+                <div class="kpi-cell"><div class="text-label">总请求数</div><div class="text-kpi">${fmtToken(c.total_requests)}</div><div class="kpi-delta delta-none">累计</div></div>
+                <div class="kpi-cell"><div class="text-label">总 Tokens</div><div class="text-kpi">${fmtToken(c.total_tokens)}</div><div class="kpi-delta delta-none">Prompt+Completion</div></div>
+                <div class="kpi-cell"><div class="text-label">估算费用</div><div class="text-kpi" style="color:var(--accent)">${fmtCost(c.estimated_cost_cny)}</div><div class="kpi-delta delta-none">CNY 累计</div></div>
+                <div class="kpi-cell"><div class="text-label">P95 / P99 响应</div><div class="text-kpi">${fmtMs(lp.p95)} / ${fmtMs(lp.p99)}</div><div class="kpi-delta delta-none">每token P95 ${(lp.tpot_p95||0).toFixed(1)}ms · ${lp.count} 次</div></div>`;
+            
+            renderTrend(d.five_min_stats||[],d.gpu_stats||[]);
+            renderModels(d.by_model||[]);
+            renderGpuBaseline(d.gpu_stats||[]);
+            renderTableSmart(d.recent_requests||[],lp);
+            renderSlowest(d.recent_requests||[]);
+        }
+        
+        function chartColors(){const dk=document.documentElement.classList.contains('dark');const cs=getComputedStyle(document.documentElement);return{grid:cs.getPropertyValue('--grid').trim(),tick:cs.getPropertyValue('--text-3').trim(),series:cs.getPropertyValue('--series-1').trim(),accent:cs.getPropertyValue('--accent').trim(),surface:dk?cs.getPropertyValue('--surface').trim():'#fff',ok:cs.getPropertyValue('--ok').trim(),warn:cs.getPropertyValue('--warn').trim(),danger:cs.getPropertyValue('--danger').trim()}}
+        function updateChartColors(){ if(lastData){ renderCharts(lastData); } }
+        function renderCharts(d){ renderTrend(d.five_min_stats||[],d.gpu_stats||[]); renderGpuBaseline(d.gpu_stats||[]); }
+        function createGradient(ctx,color){const g=ctx.createLinearGradient(0,0,0,280);const rgb=color.replace('#','').match(/.{2}/g).map(x=>parseInt(x,16));g.addColorStop(0,`rgba(${rgb[0]},${rgb[1]},${rgb[2]},0.08)`);g.addColorStop(1,'rgba(0,0,0,0)');return g}
+        
+        // Combined Trend: Requests(bar) + GPU(EMA line) + Anomaly markers
+        function renderTrend(fmData,gpuData){
+            const ctx=document.getElementById('trendChart').getContext('2d');const co=chartColors();
+            document.getElementById('trendBadge').textContent=fmData.length+' 个时间点';
+            
+            // 起点对齐到 5 分钟边界（UTC），否则 window_start 永远匹配不上
+            const now = Date.now();
+            const startMs = Math.floor((now - 2 * 3600 * 1000) / 300000) * 300000;
+            const allWindows=[];
+            for(let t=startMs; t<=now; t+=300000){
+                const dt=new Date(t);
+                const key=dt.toISOString().slice(0,16).replace('T',' ');   // 与后端 window_start 同格式
+                const match=fmData.find(f=>f.window_start===key);
+                allWindows.push({
+                    label:`${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}`,
+                    requests:match?match.request_count:0,
+                    avgResp:match?match.avg_response_time_ms:0,
+                    maxResp:match?match.max_response_time_ms:0,
+                    timestamp:dt.toISOString()
+                });
+            }
+
+            const labels=allWindows.map(w=>w.label);
+            const reqValues=allWindows.map(w=>w.requests);
+            const peak=Math.max(...reqValues,1);
+            const avgResp=allWindows.filter(w=>w.requests>0).reduce((a,b)=>a+b.avgResp,0)/Math.max(allWindows.filter(w=>w.requests>0).length,1);
+            document.getElementById('chartSummary').textContent=`峰值 ${peak} 次/5min · 平均响应 ${fmtMs(avgResp)}`;
+            
+            // Map GPU EMA to continuous time axis
+            const gpuEmaMap={};gpuData.forEach(g=>{gpuEmaMap[new Date(g.timestamp).toISOString()]=g.ema_utilization});
+            const emaValues=allWindows.map(w=>{
+                const match=Object.entries(gpuEmaMap).find(([k])=>Math.abs(new Date(k)-new Date(w.timestamp))<300000);
+                return match?match[1]:null;
+            });
+            
+            // Anomaly detection
+            const validReqs=reqValues.filter(v=>v>0);
+            const meanReq=validReqs.reduce((a,b)=>a+b,0)/validReqs.length||1;
+            const stdReq=Math.sqrt(validReqs.reduce((a,b)=>a+(b-meanReq)**2,0)/validReqs.length)||1;
+            const anomalyPoints=reqValues.map((v,i)=>v>meanReq+2*stdReq&&v>1?reqValues[i]:null);
+            
+            if(trendChart && trendChart._theme!==document.documentElement.className){ trendChart.destroy(); trendChart=null; }
+            if(trendChart){
+                trendChart.data.labels=labels;trendChart.data.datasets[0].data=reqValues;trendChart.data.datasets[1].data=emaValues;trendChart.data.datasets[2].data=anomalyPoints;
+                trendChart.update('none');
+            }else{
+                trendChart=new Chart(ctx,{type:'bar',data:{labels,datasets:[
+                    {label:'请求数/5min',data:reqValues,backgroundColor:co.series,borderRadius:3,barPercentage:0.7,yAxisID:'y',order:2},
+                    {label:'GPU EMA (%)',data:emaValues,type:'line',borderColor:co.accent,backgroundColor:'transparent',borderWidth:2,tension:0,pointRadius:0,pointHoverRadius:4,yAxisID:'y1',order:1,spanGaps:true},
+                    {label:'异常峰值',data:anomalyPoints,type:'line',borderColor:co.danger,backgroundColor:'transparent',borderWidth:0,pointRadius:6,pointBackgroundColor:co.danger,pointBorderColor:'#fff',pointBorderWidth:2,showLine:false,yAxisID:'y',order:0}
+                ]},options:{responsive:true,maintainAspectRatio:false,interaction:{intersect:false,mode:'index'},plugins:{legend:{display:true,position:'top',labels:{color:co.tick,usePointStyle:true,padding:10,font:{size:11}}},tooltip:{backgroundColor:co.surface==='#fff'?'rgba(17,20,24,.9)':'rgba(28,32,36,.95)',titleColor:co.tick,bodyColor:co.tick,padding:10,cornerRadius:8}},scales:{x:{grid:{color:co.grid,drawBorder:false},ticks:{color:co.tick,maxRotation:0,font:{size:11},maxTicksLimit:24}},y:{beginAtZero:true,position:'left',grid:{color:co.grid,drawBorder:false},ticks:{color:co.tick,font:{size:11},stepSize:1}},y1:{beginAtZero:true,max:100,position:'right',grid:{drawOnChartArea:false},ticks:{color:co.tick,font:{size:11},callback:v=>v+'%'}}}}});
+            }
+        }
+        
+        function renderModels(data){
+            const container=document.getElementById('modelRanking');
+            // unknown 表示"没解析出模型名"，不是模型，不参与排名
+            const list=(data||[]).filter(m=>m.model && m.model!=='unknown');
+            document.getElementById('modelBadge').textContent=list.length+' 个模型';
+            if(!list.length){
+                container.innerHTML='<div class="text-meta" style="text-align:center;padding:24px">暂无数据</div>';
+                return;
+            }
+            const maxReq=Math.max(...list.map(d=>d.request_count),1);
+            container.innerHTML=list.map(m=>{
+                const tps=(m.avg_tokens_per_second||0);
+                return `<div class="h-bar-row">
+                    <div class="h-bar-label" title="${esc(m.model)}">${esc(m.model)}</div>
+                    <div class="h-bar-track"><div class="h-bar-fill" style="width:${(m.request_count/maxReq*100).toFixed(0)}%"></div></div>
+                    <div class="h-bar-value">${fmtToken(m.request_count)}</div>
+                    <div class="h-bar-sub" title="平均耗时 ${fmtMs(m.avg_response_time_ms)}">${tps?tps.toFixed(0)+' tok/s':'—'}</div>
+                </div>`;
+            }).join('');
+        }
+        
+        // GPU Baseline Chart: Raw + EMA + Z-Score color band
+        function renderGpuBaseline(gpuData){
+            const ctx=document.getElementById('gpuChart').getContext('2d');const co=chartColors();
+            const labelEl=document.getElementById('gpuLabel');
+            if(!gpuData.length){
+                labelEl.textContent='等待采样…';
+                if(gpuChart){ gpuChart.data.labels=[]; gpuChart.data.datasets.forEach(ds=>ds.data=[]); gpuChart._times=[]; gpuChart.update('none'); }
+                return;
+            }
+
+            const latest=gpuData[gpuData.length-1];
+            const first=new Date(gpuData[0].timestamp);
+            const last=new Date(latest.timestamp);
+            const spanMin=Math.max(1,Math.round((last-first)/60000));
+            // label 每次都要更新（之前只在建图时写一次，导致一直停在“无数据”）
+            const cur = latest.gpu_utilization_pct;
+            const curTxt = cur < 1 ? '空闲' : cur.toFixed(1) + '%';
+            // 汇总：平均 / 峰值 / 活跃占比 / 峰值内存
+            (function(){
+                const vals=gpuData.map(g=>g.gpu_utilization_pct||0);
+                const avg=vals.reduce((a,b)=>a+b,0)/vals.length;
+                const peak=Math.max(...vals);
+                const active=vals.filter(v=>v>10).length;      // 活跃阈值：>10%
+                const activePct=vals.length?active/vals.length*100:0;
+                const memPeak=Math.max(...gpuData.map(g=>g.vram_used_bytes||0));
+                const el=document.getElementById('resSummary');
+                const memTotal=gpuData[gpuData.length-1].vram_total_bytes||0;
+                const memPct = memTotal>0 ? (memPeak/memTotal*100).toFixed(0)+'%' : '—';
+                if(el) el.textContent =
+                    `平均 ${avg.toFixed(1)}% · 峰值 ${peak.toFixed(1)}% · `+
+                    `活跃占比 ${activePct.toFixed(0)}%（${active}/${vals.length} 次采样 >10%）· `+
+                    `GPU 内存峰值 ${(memPeak/1073741824).toFixed(1)}${memTotal?'/'+(memTotal/1073741824).toFixed(0)+' GB（'+memPct+'）':' GB'}`;
+            })();
+
+            labelEl.textContent=`当前 ${curTxt} · 基线 ${latest.rolling_mean.toFixed(2)}%±${latest.rolling_stddev.toFixed(2)}% · Z=${latest.z_score.toFixed(1)} · 已采集 ${spanMin} 分钟`;
+
+            const rawVals=gpuData.map(g=>g.gpu_utilization_pct);
+            const emaVals=gpuData.map(g=>g.ema_utilization);
+            const upperVals=gpuData.map(g=>g.rolling_mean+2*g.rolling_stddev);
+            const lowerVals=gpuData.map(g=>Math.max(0,g.rolling_mean-2*g.rolling_stddev));
+            const hm=d=>`${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+            // 均匀挑 6~7 个刻度（每 5 秒一个点，全都标会糊成一片）
+            const step=Math.max(1,Math.ceil(gpuData.length/6));
+            let lastShown='';
+            const labels=gpuData.map((g,i)=>{
+                const cur=hm(new Date(g.timestamp));
+                const show=(i%step===0)||i===gpuData.length-1;
+                if(show&&cur!==lastShown){ lastShown=cur; return cur; }
+                return '';
+            });
+
+            if(gpuChart){
+                gpuChart._times=gpuData.map(g=>g.timestamp);
+                gpuChart.data.labels=labels;
+                gpuChart.data.datasets[0].data=rawVals;
+                gpuChart.data.datasets[1].data=emaVals;
+                gpuChart.data.datasets[2].data=upperVals;
+                gpuChart.data.datasets[3].data=lowerVals;
+                gpuChart.update('none');
+            }else{
+                gpuChart=new Chart(ctx,{type:'line',data:{labels,datasets:[
+                    {label:'原始值',data:rawVals,borderColor:co.series,backgroundColor:'transparent',borderWidth:1,pointRadius:0,tension:0,yAxisID:'y',order:3},
+                    {label:'EMA 平滑',data:emaVals,borderColor:co.accent,backgroundColor:'transparent',borderWidth:2,pointRadius:0,tension:0,yAxisID:'y',order:2},
+                    {label:'μ+2σ 上界',data:upperVals,borderColor:co.warn,backgroundColor:'transparent',borderWidth:1,borderDash:[4,4],pointRadius:0,tension:0,yAxisID:'y',order:1},
+                    {label:'μ-2σ 下界',data:lowerVals,borderColor:co.warn,backgroundColor:'transparent',borderWidth:1,borderDash:[4,4],pointRadius:0,tension:0,yAxisID:'y',order:1}
+                ]},options:{responsive:true,maintainAspectRatio:false,interaction:{intersect:false,mode:'index'},
+                    plugins:{legend:{display:true,position:'top',labels:{color:co.tick,usePointStyle:true,padding:8,font:{size:11}}},
+                             tooltip:{backgroundColor:co.surface==='#fff'?'rgba(17,20,24,.9)':'rgba(28,32,36,.95)',titleColor:co.tick,bodyColor:co.tick,padding:10,cornerRadius:8,
+                                      callbacks:{title:(items)=>{const ch=items[0].chart;const t=ch._times&&ch._times[items[0].dataIndex];
+                                                 return t?new Date(t).toLocaleTimeString('zh-CN',{hour12:false}):'';}}}},
+                    scales:{
+                        x:{grid:{display:false,drawBorder:false},ticks:{color:co.tick,font:{size:10},maxRotation:0,autoSkip:false,includeBounds:true}},
+                        y:{beginAtZero:true,max:100,grid:{color:co.grid,drawBorder:false},ticks:{color:co.tick,font:{size:10},callback:v=>v+'%'}}
+                    }}});
+            }
+        }
+        
+        // Smart Table: sorted by anomaly score, filter timeout noise
+        // 相对时间：表格里只需要"多久以前"，精确时间放 title
+        function relTime(ts){
+            const t = new Date(ts).getTime();
+            if(!t) return '-';
+            const d = Math.max(0, Math.round((Date.now()-t)/1000));
+            if(d<60) return d+'秒前';
+            if(d<3600) return Math.round(d/60)+'分钟前';
+            if(d<86400) return Math.round(d/3600)+'小时前';
+            return Math.round(d/86400)+'天前';
+        }
+
+        // 把异常分翻译成人话：一眼看出这行为什么被标出来
+        function rowFlag(r, lp, modelP95){
+            if(!r.success) return {text:'失败', cls:'status-err', why:'请求失败'};
+            const tpot = r.time_per_token_ms||0;
+            // 只在"同一模型有足够样本"时才判生成慢：跨模型比速度没有意义
+            const base = modelP95[r.model] || 0;
+            if(base && tpot>base) return {text:'生成慢', cls:'status-warn', why:`每 token ${tpot.toFixed(1)}ms，高于该模型常态 ${base.toFixed(1)}ms`};
+            const total = r.response_time_ms||0;
+            const gen = tpot*(r.completion_tokens||0);
+            const ovh = Math.max(0, total-(r.ttft_ms||0)-gen);
+            if(total>0 && ovh/total>0.4 && ovh>1000) return {text:'排队', cls:'status-warn', why:`等待 ${fmtMs(ovh)}，占 ${(ovh/total*100).toFixed(0)}%`};
+            if((r.ttft_ms||0)>2000) return {text:'首字慢', cls:'status-warn', why:`首字 ${fmtMs(r.ttft_ms)}`};
+            return {text:'正常', cls:'status-ok', why:''};
+        }
+
+        function renderTableSmart(rows,lp){
+            const tb=document.getElementById('recentTableBody');
+
+            // 无效探测（模型名没解析出来、0 token）不是真实请求，折叠掉并计数
+            const validRows=rows.filter(r=>!(r.model==='unknown' && (r.total_tokens||0)===0));
+            const dropped=rows.length-validRows.length;
+
+            // 按模型算每 token 耗时的 P95；样本 <3 不给基线（避免单条记录被说"慢"）
+            const byModel={};
+            validRows.forEach(r=>{
+                const t=r.time_per_token_ms||0;
+                if(t>0){ (byModel[r.model] = byModel[r.model] || []).push(t); }
+            });
+            const modelP95={};
+            Object.entries(byModel).forEach(([m,v])=>{
+                if(v.length>=3){ v.sort((a,b)=>a-b); modelP95[m]=v[Math.min(v.length-1, Math.floor(v.length*0.95))]; }
+            });
+
+            const scored=validRows.map(r=>{
+                let score=0;
+                const total=r.response_time_ms||0;
+                const gen=(r.time_per_token_ms||0)*(r.completion_tokens||0);
+                const overhead=Math.max(0,total-(r.ttft_ms||0)-gen);
+                const overheadPct=total>0?overhead/total*100:0;
+                const tpot=r.time_per_token_ms||0;
+                if(lp.tpot_p95&&tpot>lp.tpot_p95)score+=2;
+                if(lp.tpot_p99&&tpot>lp.tpot_p99)score+=3;
+                if(overheadPct>40&&overhead>1000)score+=2;
+                if((r.ttft_ms||0)>2000)score+=1;
+                if(!r.success)score+=5;
+                return{...r,score,overhead,overheadPct,flag:rowFlag(r,lp,modelP95)};
+            }).sort((a,b)=>b.score-a.score);
+
+            const note = dropped ? `<span class="text-meta" style="margin-left:8px;color:var(--warn)">· 已隐藏 ${dropped} 条无效探测</span>` : '';
+            document.getElementById('tableBadge').innerHTML=`${validRows.length} 条${note}`;
+
+            if(!scored.length){
+                tb.innerHTML='<tr><td colspan="6" style="text-align:center;padding:40px;color:var(--text-3)">暂无有效请求记录</td></tr>';
+                window._scoredRows=[];return;
+            }
+
+            tb.innerHTML=scored.map((r,i)=>`<tr onclick="showDetail(${i})" style="${r.flag.cls==='status-warn'||r.flag.cls==='status-err'?'background:var(--accent-weak)':''}">
+                <td class="col-time" style="color:var(--text-3);font-size:12px" title="${new Date(r.timestamp).toLocaleString('zh-CN')}">${relTime(r.timestamp)}</td>
+                <td><span class="chip" title="${esc(r.model)}">${esc(r.model)}</span></td>
+                <td class="num-col col-out text-table">${fmtToken(r.completion_tokens)}</td>
+                <td class="num-col text-table">${fmtMs(r.response_time_ms)}</td>
+                <td class="num-col col-tps text-table" style="color:var(--text-2)">${(r.tokens_per_second||0).toFixed(1)}</td>
+                <td><span class="status ${r.flag.cls}" title="${esc(r.flag.why)}"><span class="status-dot"></span>${r.flag.text}</span></td>
+            </tr>`).join('');
+            window._scoredRows=scored;
+        }
+        
+        // Micro Detail with Context Comparison
+        function showDetail(idx){
+            const r=window._scoredRows?.[idx];if(!r)return;
+            const overlay=document.getElementById('detailOverlay');
+            document.getElementById('detailTitle').textContent=`${r.model} · ${new Date(r.timestamp).toLocaleString('zh-CN')}`;
+            const total=r.response_time_ms||1;const ttft=r.ttft_ms||0;const genTime=(r.time_per_token_ms||0)*(r.completion_tokens||0);const overhead=Math.max(0,total-ttft-genTime);
+            document.getElementById('detailBars').innerHTML=`<div class="text-label" style="margin-bottom:var(--space-2)">耗时分解</div>${[{label:'首字延迟(TTFT)',value:ttft,color:'var(--accent)'},{label:'Token生成',value:genTime,color:'var(--series-1)'},{label:'其他开销',value:overhead,color:'var(--text-3)'}].map(b=>`<div class="detail-bar-row"><div class="detail-bar-label">${b.label}</div><div class="detail-bar-track"><div class="detail-bar-fill" style="width:${(b.value/total*100).toFixed(1)}%;background:${b.color}"></div></div><div class="detail-bar-value">${fmtMs(b.value)}</div></div>`).join('')}<div class="text-meta" style="margin-top:var(--space-2)">总耗时: ${fmtMs(total)} · Tokens/s: ${(r.tokens_per_second||0).toFixed(1)}</div>`;
+            
+            const gpuStat=window._gpuStats?.find(g=>Math.abs(new Date(g.timestamp)-new Date(r.timestamp))<30000);
+            const allReqs=window._scoredRows||[];
+            const tpotList=allReqs.map(b=>b.time_per_token_ms||0).filter(v=>v>0);
+            const avgTpot=tpotList.length?tpotList.reduce((a,b)=>a+b,0)/tpotList.length:0;
+            const avgCompl=allReqs.length?allReqs.reduce((a,b)=>a+(b.completion_tokens||0),0)/allReqs.length:0;
+            
+            document.getElementById('detailGrid').innerHTML=`
+                <div class="detail-item"><div class="detail-item-label">Prompt Tokens</div><div class="detail-item-value">${fmtToken(r.prompt_tokens)}</div></div>
+                <div class="detail-item"><div class="detail-item-label">Completion Tokens</div><div class="detail-item-value">${fmtToken(r.completion_tokens)}</div></div>
+                <div class="detail-item"><div class="detail-item-label">每 Token 耗时</div><div class="detail-item-value">${fmtMs(r.time_per_token_ms)}</div></div>
+                <div class="detail-item"><div class="detail-item-label">生成速度</div><div class="detail-item-value">${(r.tokens_per_second||0).toFixed(1)} tok/s</div></div>
+                ${gpuStat?`<div class="detail-item"><div class="detail-item-label">当时 GPU 利用率</div><div class="detail-item-value">${gpuStat.gpu_utilization_pct.toFixed(1)}%</div></div><div class="detail-item"><div class="detail-item-label">当时显存</div><div class="detail-item-value">${(gpuStat.vram_used_bytes/(1024**3)).toFixed(1)} GB</div></div>`:''}
+                <div class="detail-item"><div class="detail-item-label">客户端 IP</div><div class="detail-item-value" style="font-size:13px">${esc(r.client_ip||'-')}</div></div>
+                <div class="detail-item"><div class="detail-item-label">端点</div><div class="detail-item-value" style="font-size:13px">/${esc(r.endpoint||'chat')}</div></div>`;
+            
+            // Context comparison
+            const tpotRatio=avgTpot>0?((r.time_per_token_ms||0)/avgTpot):1;
+            const complRatio=avgCompl>0?((r.completion_tokens||0)/avgCompl):1;
+            const ovhMs=Math.max(0,(r.response_time_ms||0)-(r.ttft_ms||0)-((r.time_per_token_ms||0)*(r.completion_tokens||0)));
+            const ovhPct=(r.response_time_ms||1)>0?ovhMs/(r.response_time_ms||1)*100:0;
+
+            let contextHtml=`<strong>上下文对比（vs 本页平均）：</strong><br>`;
+            contextHtml+=`• 每 token 耗时 ${fmtMs(r.time_per_token_ms)} vs ${fmtMs(avgTpot)} → ${tpotRatio>1.15?`<span style="color:var(--danger)">慢 ${tpotRatio.toFixed(1)} 倍 ⚠️</span>`:`基本持平 ✓`}<br>`;
+            contextHtml+=`• 输出长度 ${fmtToken(r.completion_tokens)} vs ${fmtToken(Math.round(avgCompl))} → ${complRatio>1.5?`长 ${complRatio.toFixed(1)} 倍（总耗时高属正常）`:`相当`}<br>`;
+            contextHtml+=`• 其他开销 ${fmtMs(ovhMs)}（占 ${ovhPct.toFixed(0)}%）→ ${ovhPct>40?`<span style="color:var(--warn)">排队/加载占比高 ⚠️</span>`:`正常`}`;
+            if((r.ttft_ms||0)>2000)contextHtml+=`<br>• 首字延迟 ${fmtMs(r.ttft_ms)} → <span style="color:var(--warn)">首字偏慢</span>`;
+            if(gpuStat&&gpuStat.z_score>2)contextHtml+=`<br>• 当时 GPU Z-Score=${gpuStat.z_score.toFixed(1)} → 资源异常紧张 ⚠️`;
+            document.getElementById('detailContext').innerHTML=contextHtml;
+            overlay.classList.add('open');
+        }
+        function closeDetail(){document.getElementById('detailOverlay').classList.remove('open')}
+        document.addEventListener('keydown',e=>{if(e.key==='Escape')closeDetail()});
+        
+        // 最慢请求的耗时拆解：把"总耗时"拆成可归因的四段
+        function renderSlowest(rows){
+            const box=document.getElementById('slowBreakdown');
+            // 只有记录了阶段耗时的请求才能拆解（旧数据没有这些字段）
+            const top=(rows||[]).filter(r=>r.success && (r.total_ms||0)>0)
+                .sort((a,b)=>(b.response_time_ms||0)-(a.response_time_ms||0)).slice(0,5);
+            if(!top.length){ box.innerHTML='<div class="text-meta" style="padding:20px 0">暂无带阶段数据的请求（新记录才会记录加载/输入/生成耗时）</div>'; return; }
+
+            box.innerHTML = top.map(r=>{
+                const total=r.response_time_ms||0;
+                const up=r.total_ms||0;
+                const load=r.load_ms||0, pe=r.prompt_eval_ms||0, ev=r.eval_ms||0;
+                const other=Math.max(0, up-load-pe-ev);
+                const queue=Math.max(0, total-up);      // 代理侧多出来：排队/网络
+                const pct=v=>total>0?Math.max(0,Math.min(100,v/total*100)):0;
+                const segs=[
+                    {v:load,  c:'var(--warn)',         n:'加载'},
+                    {v:queue, c:'var(--danger)',       n:'排队/网络'},
+                    {v:pe,    c:'var(--border-strong)',n:'输入处理'},
+                    {v:ev,    c:'var(--accent)',       n:'输出生成'},
+                    {v:other, c:'var(--text-3)',       n:'其他'},
+                ].filter(x=>x.v>0);
+                return `<div class="bk-row">
+                    <div class="bk-meta"><b>${esc(r.model)}</b>${relTime(r.timestamp)}</div>
+                    <div class="bk-bar">${segs.map(x=>`<div class="bk-seg" style="width:${pct(x.v).toFixed(2)}%;background:${x.c}" title="${x.n} ${fmtMs(x.v)}（${pct(x.v).toFixed(0)}%）"></div>`).join('')}</div>
+                    <div class="bk-total">${fmtMs(total)}</div>
+                </div>`;
+            }).join('') + `<div class="bk-legend">
+                <span><i style="background:var(--accent)"></i>输出生成</span>
+                <span><i style="background:var(--warn)"></i>模型加载</span>
+                <span><i style="background:var(--danger)"></i>排队/网络</span>
+                <span><i style="background:var(--border-strong)"></i>输入处理</span>
+                <span><i style="background:var(--text-3)"></i>其他</span>
+            </div>`;
+        }
+
+        // 视图切换（监控 / 接入指引）
+        function switchView(view){
+            document.querySelectorAll('.view-tab').forEach(b=>{
+                const on = b.dataset.view===view;
+                b.classList.toggle('active', on);
+                b.setAttribute('aria-selected', on?'true':'false');
+            });
+            document.getElementById('panel-monitor').hidden = view!=='monitor';
+            document.getElementById('panel-usage').hidden  = view!=='usage';
+            localStorage.setItem('view', view);
+            if(view==='monitor') loadData();
+        }
+
+        // API tabs
+        function switchApiTab(t){document.querySelectorAll('.tab-btn').forEach(b=>b.classList.toggle('active',b.textContent.toLowerCase().includes(t==='curl'?'curl':t)));document.querySelectorAll('.tab-content').forEach(c=>c.classList.remove('active'));document.getElementById('tab-'+t).classList.add('active')}
+        // 当前访问源（本机 http://localhost:PORT 或公网域名）
+        function apiBase(){
+            return window.location.origin;
+        }
+        function renderApiEndpoint(){
+            const base = apiBase();
+            const port = '__AGENT_PORT__';   // 服务端注入实际代理端口，公网打开时也不会错
+            // 只给展示用的 URL 插入零宽断行点（U+200B），复制时仍走 apiBase() 原始值
+            const zw = t => t.replace(/\//g, '/\u200B');
+            const el = document.getElementById('apiUrlCode');
+            if (el) el.textContent = zw(base + '/v1/chat/completions');
+            document.querySelectorAll('.api-content code').forEach(c => {
+                const txt = c.textContent.split('__BASE__').join(base);
+                c.textContent = c.classList.contains('url') ? zw(txt) : txt;
+            });
+            const local = document.getElementById('noteLocalUrl');
+            if (local) local.textContent = 'http://127.0.0.1' + (port ? ':' + port : '') + '/v1';
+            const pub = document.getElementById('notePublicUrl');
+            if (pub) pub.textContent = base + '/v1';
+        }
+
+        function copyToken(){
+            const t = document.getElementById('apiToken');
+            const val = t ? t.textContent.trim() : '';
+            navigator.clipboard.writeText(val).then(()=>showToast('Token 已复制')).catch(()=>showToast('复制失败','error'));
+        }
+
+        function copyApiUrl(){navigator.clipboard.writeText(apiBase()+'/v1/chat/completions').then(()=>showToast('已复制')).catch(()=>showToast('复制失败','error'))}
+        
+        // Export data (csv | json)
+        async function exportData(fmt){
+            const url = '/export?format=' + encodeURIComponent(fmt);
+            try{
+                const res = await fetch(url);
+                if(!res.ok){
+                    if(res.status===403){ showToast('导出仅限本机操作','error'); return; }
+                    showToast('导出失败：HTTP '+res.status,'error'); return;
+                }
+                const blob = await res.blob();
+                const cd = res.headers.get('Content-Disposition')||'';
+                const m = cd.match(/filename="?([^";]+)"?/);
+                const name = m ? m[1] : ('ollama-metrics.'+fmt);
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = name;
+                document.body.appendChild(a); a.click(); a.remove();
+                setTimeout(()=>URL.revokeObjectURL(a.href), 4000);
+                showToast('已下载 '+name);
+            }catch(e){ showToast('导出失败','error'); }
+        }
+
+        // Reset data with confirmation
+        function confirmReset(){
+            if(confirm('⚠️ 确定要清除所有监控数据吗？\n\n这将删除所有请求记录、GPU 统计和累积数据，开始新一轮统计。\n此操作不可恢复！')){
+                fetch('/reset',{method:'POST'}).then(async r=>{
+                    if(r.status===403){ showToast('清除仅限本机操作','error'); return; }
+                    const d = await r.json();
+                    if(d.status==='ok'){
+                        showToast('数据已清除，开始新一轮统计');
+                        loadData();
+                    }else{ showToast('清除失败','error'); }
+                }).catch(()=>showToast('清除失败','error'));
+            }
+        }
+        
+        // Auto refresh with visibility awareness
+        let autoTimer=null;function startAutoRefresh(){stopAutoRefresh();autoTimer=setInterval(loadData,30000)}function stopAutoRefresh(){if(autoTimer){clearInterval(autoTimer);autoTimer=null}}
+        document.addEventListener('visibilitychange',()=>{if(document.hidden)stopAutoRefresh();else{loadData();startAutoRefresh()}});
+        window.addEventListener('DOMContentLoaded',()=>{
+            renderApiEndpoint();
+
+            // 「导出」「清除」始终显示；权限由服务端判定，非本机调用会返回 403
+            const isLocal = ['localhost','127.0.0.1','::1','[::1]',''].includes(location.hostname);
+            document.querySelectorAll('[data-local-only]').forEach(el=>{
+                if(!isLocal){ el.title = (el.title||'') + '（仅限本机操作）'; }
+            });
+            const box=document.querySelector('.api-section details');
+            if(box){
+                const saved=localStorage.getItem('apiOpen');
+                if(saved!==null) box.open=(saved==='1');
+                box.addEventListener('toggle',()=>localStorage.setItem('apiOpen',box.open?'1':'0'));
+            }
+            const qView = new URLSearchParams(location.search).get('view') || location.hash.replace('#','');
+            const savedView = localStorage.getItem('view');
+            switchView(qView==='usage' || savedView==='usage' ? 'usage' : 'monitor');
+            loadData();startAutoRefresh();
+        });
+    </script>
+</body>
+</html>
