@@ -174,6 +174,7 @@
         <div class="topbar-meta">
             <span id="lastUpdate">更新于 --:--:--</span>
             <div class="topbar-actions">
+                <span id="hostSwitch" aria-label="访问地址切换" style="display:flex;gap:6px;align-items:center"></span>
                 <button class="btn btn-primary" id="refreshBtn" onclick="loadData()"><svg viewBox="0 0 24 24"><path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>刷新</button>
                 <button class="btn btn-secondary" data-local-only onclick="exportData('csv')" title="导出全部请求记录为 CSV（Excel 可打开）"><svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>导出</button>
                 <button class="btn btn-secondary" data-local-only onclick="confirmReset()" title="清除所有数据，开始新一轮统计"><svg viewBox="0 0 24 24"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>清除</button>
@@ -931,6 +932,25 @@ console.log(await r.json());</code></div></div><div class="tab-content" id="tab-
         function apiBase(){
             return window.location.origin;
         }
+
+        // 顶栏「本地 / 公网」一键切换链接
+        function renderHostSwitch(){
+            const el = document.getElementById('hostSwitch');
+            if(!el) return;
+            const localBase = 'http://127.0.0.1:' + '__AGENT_PORT__';
+            const publicBase = '__PUBLIC_HOST__';   // 服务端注入；未配置隧道时为空
+            const isLocal = ['localhost','127.0.0.1','::1','[::1]'].includes(location.hostname);
+            // 保留当前视图参数，切换过去不丢页面状态
+            const path = location.pathname.endsWith('.html') ? location.pathname : '/dashboard.html';
+            const qs = location.search || '?view=' + (localStorage.getItem('view')||'monitor');
+            let html = '';
+            if(!isLocal){
+                html = `<a class="btn btn-secondary" href="${localBase}${path}${qs}" title="在本机浏览器上打开（无需 Token，延迟最低）">💻 切换本地</a>`;
+            } else if(publicBase){
+                html = `<a class="btn btn-secondary" href="${publicBase}${path}${qs}" title="在别的设备上打开（需访问口令）">🌐 切换公网</a>`;
+            }
+            el.innerHTML = html;
+        }
         function renderApiEndpoint(){
             const base = apiBase();
             const port = '__AGENT_PORT__';   // 服务端注入实际代理端口，公网打开时也不会错
@@ -1086,6 +1106,7 @@ console.log(await r.json());</code></div></div><div class="tab-content" id="tab-
         document.addEventListener('visibilitychange',()=>{if(document.hidden)stopAutoRefresh();else{loadData();startAutoRefresh()}});
         window.addEventListener('DOMContentLoaded',()=>{
             renderApiEndpoint();
+            renderHostSwitch();
 
             // 「导出」「清除」始终显示；权限由服务端判定，非本机调用会返回 403
             const isLocal = ['localhost','127.0.0.1','::1','[::1]',''].includes(location.hostname);

@@ -1049,11 +1049,14 @@ async def serve_chartjs():
 
 @app.get("/dashboard.html")
 async def serve_dashboard():
-    """提供 Dashboard 页面，并把实际代理端口注入前端。"""
+    """提供 Dashboard 页面，并把实际代理端口 / 公网域名注入前端。"""
     f = SCRIPT_DIR / "dashboard.html"
+    ngrok_domain = os.environ.get("NGROK_DOMAIN", "").strip()
+    public_base = f"https://{ngrok_domain}" if ngrok_domain else ""
     html = (f.read_text(encoding="utf-8")
             .replace("__AGENT_PORT__", str(PROXY_PORT))
             .replace("__LOCAL_BASE__", f"http://127.0.0.1:{PROXY_PORT}/v1")
+            .replace("__PUBLIC_HOST__", public_base)
             .replace("__ACCESS_CODE__", ACCESS_CODE or "（未启用）"))
     return Response(content=html, media_type="text/html; charset=utf-8",
                     headers={"Cache-Control": "no-store, must-revalidate"})
@@ -1611,22 +1614,30 @@ def system_specs():
 
 
 def _parse_library_page(html: str, limit: int) -> list:
-    """解析 ollama.com library/search 页面中的模型条目。"""
+    """解析 ollama.com 的模型条目（library 列表页与 search 结果页两种结构通用）。
+
+    以 `href="/library/NAME" class="group` 为锚点切块：条目正文位于本锚点与
+    下一个锚点之间；两类页面的条目链接都带 class="group"，导航链接不带。
+    """
     models = []
-    # 按 <li ... py-6"> 条目切块
-    chunks = re.split(r'<li[^>]*class="flex items-baseline border-b border-neutral-200 py-6">', html)
-    for chunk in chunks[1:]:
+    anchors = list(re.finditer(
+        r'<a\s+href="/library/([a-z0-9][a-z0-9._-]*)"\s+class="group', html))
+    for i, m in enumerate(anchors):
         if len(models) >= limit:
             break
-        m_name = re.search(r'href="/library/([a-z0-9][a-z0-9._-]*)"', chunk)
-        if not m_name:
-            continue
-        name = m_name.group(1)
-        m_desc = re.search(r'text-neutral-800 text-md">([^<]+)</p>', chunk)
+        name = m.group(1)
+        chunk = html[m.end(): anchors[i + 1].start() if i + 1 < len(anchors) else m.end() + 6000]
+
+        # 描述：条目内第一个非空 <p>（两种页面的描述都是第一个 <p>）
+        m_desc = re.search(r"<p[^>]*>([^<]{10,})</p>", chunk)
         caps = re.findall(r'bg-indigo-50[^>]*>([a-z]+)</span>', chunk)
         sizes = re.findall(r'bg-\[#ddf4ff\][^>]*>([^<]+)</span>', chunk)
-        m_pulls = re.search(r'<span >([\d.,]+[KMB]?M?)</span>\s*<span class="hidden sm:flex">&nbsp;Pulls', chunk)
-        m_updated = re.search(r'Updated&nbsp;</span>\s*<span >([^<]+)</span>', chunk)
+        # pulls：library 页 "...<span>x</span><span>&nbsp;Pulls" / 搜索页 title="N downloads" 后跟 <span>x</span>
+        m_pulls = (re.search(r'title="[\d,]+ downloads"[^>]*>.*?<span\s*>([^<]+)</span>', chunk, re.S)
+                   or re.search(r'<span\s*>([\d.,]+[KMB]?M?)</span>\s*<span class="hidden sm:flex">&nbsp;Pulls', chunk))
+        # updated：library 页 "Updated&nbsp;</span><span>x</span>" / 搜索页 title="Updated ..." 后的相对时间
+        m_updated = (re.search(r'title="Updated[^"]*"[^>]*>\s*([^<]+)<', chunk)
+                     or re.search(r'Updated&nbsp;</span>\s*<span\s*>([^<]+)</span>', chunk))
         models.append({
             "name": name,
             "description": m_desc.group(1).strip() if m_desc else "",
@@ -1650,6 +1661,10 @@ def search_online_models(q: str = "", limit: int = 40):
                             headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"})
         resp.raise_for_status()
         models = _parse_library_page(resp.text, max(1, min(limit, 100)))
+        # 搜索模式下，页面底部会混入「相关推荐」条目，过滤掉与关键词无关的
+        if q:
+            kw = q.lower().strip()
+            models = [m for m in models if kw in m["name"].lower()]
         return {"online": True, "query": q, "count": len(models), "models": models}
     except Exception as e:
         return JSONResponse(status_code=503, content={
