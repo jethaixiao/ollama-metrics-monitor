@@ -17,6 +17,9 @@ import logging
 import threading
 import subprocess
 import re
+import shutil
+import platform
+from urllib.parse import quote
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
@@ -1525,6 +1528,276 @@ async def model_residency(request: Request):
             return JSONResponse(status_code=resp.status_code, content={"error": err})
 
         return {"status": "ok", "model": model, "enabled": enabled}
+    except Exception as e:
+        return JSONResponse(status_code=502, content={"error": str(e)})
+
+
+# ==================== 模型生命周期管理（找模型 / 下载 / 兼容性 / 卸载） ====================
+
+_specs_cache: dict = {"data": None, "ts": 0.0}
+
+
+def _run_sysctl(key: str) -> str:
+    try:
+        return subprocess.run(["sysctl", "-n", key],
+                              capture_output=True, text=True, timeout=5).stdout.strip()
+    except Exception:
+        return ""
+
+
+def _mac_memory_available() -> Optional[int]:
+    """macOS 可用内存粗估：free + inactive + purgeable（vm_stat，页为单位）。"""
+    try:
+        out = subprocess.run(["vm_stat"], capture_output=True, text=True, timeout=5).stdout
+        m = re.search(r"page size of (\d+) bytes", out)
+        page = int(m.group(1)) if m else 4096
+
+        def pages(label: str) -> int:
+            mm = re.search(label + r":\s+(\d+)", out)
+            return int(mm.group(1)) if mm else 0
+
+        free = pages(r"Pages free") + pages(r"Pages speculative")
+        inactive = pages(r"Pages inactive")
+        purgeable = pages(r"Pages purgeable")
+        return (free + inactive + purgeable) * page
+    except Exception:
+        return None
+
+
+@app.get("/api/system/specs")
+def system_specs():
+    """本机硬件配置（用于模型兼容性评估）。缓存 60 秒。"""
+    now = time.time()
+    if _specs_cache["data"] and now - _specs_cache["ts"] < 60:
+        return _specs_cache["data"]
+
+    specs: dict = {"platform": sys.platform}
+    if sys.platform == "darwin":
+        specs["cpu"] = _run_sysctl("machdep.cpu.brand_string") or platform.processor() or "未知"
+        specs["is_apple_silicon"] = platform.machine() == "arm64"
+        try:
+            specs["memory_total"] = int(_run_sysctl("hw.memsize"))
+        except ValueError:
+            specs["memory_total"] = None
+        specs["memory_available"] = _mac_memory_available()
+    else:
+        specs["cpu"] = platform.processor() or "未知"
+        specs["is_apple_silicon"] = False
+        specs["memory_total"] = None
+        specs["memory_available"] = None
+
+    try:
+        du = shutil.disk_usage("/")
+        specs["disk_total"] = du.total
+        specs["disk_free"] = du.free
+    except Exception:
+        specs["disk_total"] = specs["disk_free"] = None
+
+    # Ollama 模型目录占用
+    try:
+        ollama_dir = Path.home() / ".ollama" / "models"
+        total_size = 0
+        if ollama_dir.is_dir():
+            for p in ollama_dir.rglob("*"):
+                if p.is_file():
+                    total_size += p.stat().st_size
+        specs["ollama_models_size"] = total_size
+    except Exception:
+        specs["ollama_models_size"] = None
+
+    _specs_cache["data"] = specs
+    _specs_cache["ts"] = now
+    return specs
+
+
+def _parse_library_page(html: str, limit: int) -> list:
+    """解析 ollama.com library/search 页面中的模型条目。"""
+    models = []
+    # 按 <li ... py-6"> 条目切块
+    chunks = re.split(r'<li[^>]*class="flex items-baseline border-b border-neutral-200 py-6">', html)
+    for chunk in chunks[1:]:
+        if len(models) >= limit:
+            break
+        m_name = re.search(r'href="/library/([a-z0-9][a-z0-9._-]*)"', chunk)
+        if not m_name:
+            continue
+        name = m_name.group(1)
+        m_desc = re.search(r'text-neutral-800 text-md">([^<]+)</p>', chunk)
+        caps = re.findall(r'bg-indigo-50[^>]*>([a-z]+)</span>', chunk)
+        sizes = re.findall(r'bg-\[#ddf4ff\][^>]*>([^<]+)</span>', chunk)
+        m_pulls = re.search(r'<span >([\d.,]+[KMB]?M?)</span>\s*<span class="hidden sm:flex">&nbsp;Pulls', chunk)
+        m_updated = re.search(r'Updated&nbsp;</span>\s*<span >([^<]+)</span>', chunk)
+        models.append({
+            "name": name,
+            "description": m_desc.group(1).strip() if m_desc else "",
+            "capabilities": caps,
+            "sizes": sizes,
+            "pulls": m_pulls.group(1) if m_pulls else "",
+            "updated": m_updated.group(1) if m_updated else "",
+        })
+    return models
+
+
+@app.get("/api/models/search")
+def search_online_models(q: str = "", limit: int = 40):
+    """搜索 Ollama 在线模型库（需联网；离线返回 503 由前端降级提示）。"""
+    try:
+        if q:
+            url = f"https://ollama.com/search?q={quote(q)}"
+        else:
+            url = "https://ollama.com/library?sort=popular"
+        resp = requests.get(url, timeout=15,
+                            headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"})
+        resp.raise_for_status()
+        models = _parse_library_page(resp.text, max(1, min(limit, 100)))
+        return {"online": True, "query": q, "count": len(models), "models": models}
+    except Exception as e:
+        return JSONResponse(status_code=503, content={
+            "error": "在线模型库不可达（离线或网络受限）",
+            "detail": str(e)[:200],
+            "online": False,
+        })
+
+
+def _registry_manifest_size(repo: str, tag: str) -> Optional[int]:
+    """从 registry.ollama.ai 拉 manifest 计算模型总大小（字节）。"""
+    headers = {
+        "Accept": ", ".join([
+            "application/vnd.docker.distribution.manifest.v2+json",
+            "application/vnd.ollama.image.manifest",
+        ]),
+    }
+    try:
+        r = requests.get(
+            f"https://registry.ollama.ai/v2/library/{repo}/manifests/{tag}",
+            headers=headers, timeout=15)
+        if r.status_code != 200:
+            return None
+        mf = r.json()
+        total = mf.get("config", {}).get("size", 0)
+        for layer in mf.get("layers", []):
+            total += layer.get("size", 0)
+        return total if total > 0 else None
+    except Exception:
+        return None
+
+
+def _evaluate_compat(size_bytes: int, specs: dict) -> dict:
+    """按本机配置评估模型可运行性。Apple Silicon 用统一内存估算。"""
+    gb = size_bytes / 1024**3
+    disk_free = specs.get("disk_free")
+    disk_ok = disk_free is None or disk_free > size_bytes * 1.15
+
+    mem_total = specs.get("memory_total")
+    mem_avail = specs.get("memory_available")
+
+    if specs.get("is_apple_silicon") and mem_total:
+        # 统一内存：模型权重 + KV cache + 系统占用。经验阈值：
+        # ≤ 总内存 65% → 流畅；≤ 85% → 紧张；否则基本跑不动
+        if gb <= mem_total / 1024**3 * 0.65:
+            verdict, level = "ok", "✅ 可运行"
+            reason = f"模型 {gb:.1f} GB ≤ 统一内存 {(mem_total/1024**3):.0f} GB 的 65%，可流畅运行"
+        elif gb <= mem_total / 1024**3 * 0.85:
+            verdict, level = "tight", "⚠️ 内存紧张"
+            reason = f"模型 {gb:.1f} GB 接近统一内存 {(mem_total/1024**3):.0f} GB 上限，可能需关闭其他应用"
+        else:
+            verdict, level = "no", "❌ 内存不足"
+            reason = f"模型 {gb:.1f} GB 超出统一内存 {(mem_total/1024**3):.0f} GB × 85%，不建议下载"
+    elif mem_total:
+        # 通用（无统一内存）：按当前可用内存估
+        avail_gb = (mem_avail or mem_total // 3) / 1024**3
+        if gb <= avail_gb * 0.9:
+            verdict, level = "ok", "✅ 可运行"
+            reason = f"模型 {gb:.1f} GB ≤ 当前可用内存约 {avail_gb:.1f} GB"
+        elif mem_total and gb <= mem_total / 1024**3 * 0.8:
+            verdict, level = "tight", "⚠️ 内存紧张"
+            reason = f"模型 {gb:.1f} GB 需要占用大部分总内存 {(mem_total/1024**3):.0f} GB"
+        else:
+            verdict, level = "no", "❌ 内存不足"
+            reason = f"模型 {gb:.1f} GB 超出本机总内存 {(mem_total/1024**3):.0f} GB"
+    else:
+        verdict, level, reason = "unknown", "❓ 未知", "无法获取本机内存信息"
+
+    if not disk_ok:
+        verdict, level = "no_disk", "❌ 磁盘空间不足"
+        reason += f"；且磁盘剩余不足（需 {gb*1.15:.1f} GB）"
+
+    return {"verdict": verdict, "label": level, "reason": reason}
+
+
+@app.get("/api/models/compat")
+def model_compat(name: str):
+    """评估 name[:tag] 在本机的可运行性（联网查 registry manifest）。"""
+    if "/" in name:
+        repo_full, _, tag = name.partition(":")
+        repo = repo_full.split("/")[-1]
+        tag = tag or "latest"
+    else:
+        repo, _, tag = name.partition(":")
+        tag = tag or "latest"
+
+    size = _registry_manifest_size(repo, tag)
+    if size is None:
+        return JSONResponse(status_code=404, content={"error": f"未找到模型 {repo}:{tag}（或 registry 不可达）"})
+
+    specs = system_specs()
+    result = _evaluate_compat(size, specs)
+    return {
+        "model": f"{repo}:{tag}",
+        "size_bytes": size,
+        "size_gb": round(size / 1024**3, 1),
+        "specs": {k: specs.get(k) for k in ("cpu", "is_apple_silicon", "memory_total", "memory_available", "disk_free")},
+        **result,
+    }
+
+
+@app.post("/api/models/pull")
+async def pull_model(request: Request):
+    """下载模型：流式转发 Ollama /api/pull 进度（NDJSON）。仅限本机。"""
+    if not _is_local_request(request) or not _is_same_origin(request):
+        return JSONResponse(status_code=403, content={"error": "下载仅限本机操作"})
+    try:
+        body = await request.json()
+    except Exception as e:
+        return JSONResponse(status_code=400, content={"error": f"Invalid body: {e}"})
+    name = (body.get("name") or body.get("model") or "").strip()
+    if not name:
+        return JSONResponse(status_code=400, content={"error": "name is required"})
+
+    def stream():
+        try:
+            with session.post(f"{OLLAMA_BASE_URL}/api/pull",
+                              json={"name": name, "stream": True},
+                              stream=True, timeout=(10, 7200)) as r:
+                if r.status_code != 200:
+                    yield json.dumps({"error": f"Ollama pull HTTP {r.status_code}"}).encode() + b"\n"
+                    return
+                for line in r.iter_lines():
+                    if line:
+                        yield line.encode() + b"\n"
+        except Exception as e:
+            yield json.dumps({"error": str(e)[:300]}).encode() + b"\n"
+
+    return StreamingResponse(stream(), media_type="application/x-ndjson")
+
+
+@app.post("/api/models/remove")
+async def remove_model(request: Request):
+    """删除本地模型。仅限本机。"""
+    if not _is_local_request(request) or not _is_same_origin(request):
+        return JSONResponse(status_code=403, content={"error": "删除仅限本机操作"})
+    try:
+        body = await request.json()
+    except Exception as e:
+        return JSONResponse(status_code=400, content={"error": f"Invalid body: {e}"})
+    name = (body.get("name") or body.get("model") or "").strip()
+    if not name:
+        return JSONResponse(status_code=400, content={"error": "name is required"})
+    try:
+        resp = session.delete(f"{OLLAMA_BASE_URL}/api/delete", json={"name": name}, timeout=60)
+        if resp.status_code != 200:
+            return JSONResponse(status_code=resp.status_code, content={"error": resp.text[:300]})
+        return {"status": "ok", "model": name}
     except Exception as e:
         return JSONResponse(status_code=502, content={"error": str(e)})
 
