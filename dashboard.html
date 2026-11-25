@@ -216,7 +216,7 @@
             </div>
         </div>
         <!-- Recent Requests Table -->
-        <div class="section"><div class="card"><div class="card-header"><span class="text-label">最近请求（按异常分数排序）</span><span class="text-meta" id="tableBadge">加载中</span></div><div class="table-wrap"><table><colgroup><col style="width:13%"><col style="width:32%"><col style="width:11%"><col style="width:13%"><col style="width:12%"><col style="width:19%"></colgroup><thead><tr><th>时间</th><th>模型</th><th class="num-col">输出</th><th class="num-col">耗时</th><th class="num-col">tok/s</th><th>判定</th></tr></thead><tbody id="recentTableBody"><tr><td colspan="6" style="text-align:center;padding:40px;color:var(--text-3)">加载中...</td></tr></tbody></table></div></div></div>
+        <div class="section"><div class="card"><div class="card-header"><span class="text-label">最近请求（最新 20 条）</span><span class="text-meta" id="tableBadge">加载中</span></div><div class="table-wrap"><table><colgroup><col style="width:13%"><col style="width:32%"><col style="width:11%"><col style="width:13%"><col style="width:12%"><col style="width:19%"></colgroup><thead><tr><th>时间</th><th>模型</th><th class="num-col">输出</th><th class="num-col">耗时</th><th class="num-col">tok/s</th><th>判定</th></tr></thead><tbody id="recentTableBody"><tr><td colspan="6" style="text-align:center;padding:40px;color:var(--text-3)">加载中...</td></tr></tbody></table></div></div></div>
         <!-- GPU Resource Monitor -->
         <div class="section"><div class="card"><div class="card-header"><span class="text-label">最慢请求 · 每模型 Top 2 · 耗时拆解</span><span class="text-meta">慢在加载、排队，还是真的在算？</span></div><div id="slowBreakdown"></div></div></div>
 
@@ -582,7 +582,7 @@ console.log(await r.json());</code></div></div><div class="tab-content" id="tab-
             }
         }
         
-        // Smart Table: sorted by anomaly score, filter timeout noise
+        // Smart Table: 最近 20 条，按时间倒序（最新的在最前），只折叠无效探测
         // 相对时间：表格里只需要"多久以前"，精确时间放 title
         function relTime(ts){
             const t = new Date(ts).getTime();
@@ -627,23 +627,14 @@ console.log(await r.json());</code></div></div><div class="tab-content" id="tab-
                 if(v.length>=3){ v.sort((a,b)=>a-b); modelP95[m]=v[Math.min(v.length-1, Math.floor(v.length*0.95))]; }
             });
 
-            const scored=validRows.map(r=>{
-                let score=0;
-                const total=r.response_time_ms||0;
-                const gen=(r.time_per_token_ms||0)*(r.completion_tokens||0);
-                const overhead=Math.max(0,total-(r.ttft_ms||0)-gen);
-                const overheadPct=total>0?overhead/total*100:0;
-                const tpot=r.time_per_token_ms||0;
-                if(lp.tpot_p95&&tpot>lp.tpot_p95)score+=2;
-                if(lp.tpot_p99&&tpot>lp.tpot_p99)score+=3;
-                if(overheadPct>40&&overhead>1000)score+=2;
-                if((r.ttft_ms||0)>2000)score+=1;
-                if(!r.success)score+=5;
-                return{...r,score,overhead,overheadPct,flag:rowFlag(r,lp,modelP95)};
-            }).sort((a,b)=>b.score-a.score);
+            const scored=validRows
+                .slice()
+                .sort((a,b)=>new Date(b.timestamp)-new Date(a.timestamp))
+                .slice(0,20)
+                .map(r=>({...r,flag:rowFlag(r,lp,modelP95)}));
 
             const note = dropped ? `<span class="text-meta" style="margin-left:8px;color:var(--warn)">· 已隐藏 ${dropped} 条无效探测</span>` : '';
-            document.getElementById('tableBadge').innerHTML=`${validRows.length} 条${note}`;
+            document.getElementById('tableBadge').innerHTML=`${scored.length} 条 · 最新在上${note}`;
 
             if(!scored.length){
                 tb.innerHTML='<tr><td colspan="6" style="text-align:center;padding:40px;color:var(--text-3)">暂无有效请求记录</td></tr>';

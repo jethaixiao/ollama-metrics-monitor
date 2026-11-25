@@ -2117,7 +2117,8 @@ async def remove_model(request: Request):
 async def get_metrics(request: Request):
     """获取监控指标（供 Dashboard 调用）"""
     cumulative = db.get_cumulative_stats()
-    recent = db.get_recent_requests(limit=20)
+    # 多取一些：前端要展示"最新 20 条有效请求"，需要留出被折叠的无效探测余量
+    recent = db.get_recent_requests(limit=60)
     slowest_by_model = db.get_slowest_per_model(per_model=2, max_models=4)
     hourly = db.get_hourly_stats(hours=24)
     five_min = db.get_five_min_stats(minutes=120)
