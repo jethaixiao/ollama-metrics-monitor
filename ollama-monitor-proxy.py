@@ -1480,6 +1480,55 @@ def proxy_ps(request: Request):
         return JSONResponse(status_code=502, content={"error": str(e)})
 
 
+@app.post("/api/model-residency")
+async def model_residency(request: Request):
+    """加载/卸载模型到内存（仅限本机）。
+
+    enabled=true  → 发空 generate 请求让 Ollama 加载模型（keep_alive=-1 常驻）
+    enabled=false → 发 keep_alive=0 请求让 Ollama 立即卸载
+    """
+    if not _is_local_request(request) or not _is_same_origin(request):
+        return JSONResponse(status_code=403, content={"error": "仅限本机操作"})
+
+    if request.headers.get("x-model-control") != "1":
+        return JSONResponse(status_code=403, content={"error": "missing X-Model-Control header"})
+
+    try:
+        body = await request.body()
+        payload = json.loads(body)
+    except Exception as e:
+        return JSONResponse(status_code=400, content={"error": f"Invalid body: {e}"})
+
+    model = (payload.get("model") or "").strip()
+    enabled = bool(payload.get("enabled", False))
+    if not model:
+        return JSONResponse(status_code=400, content={"error": "model is required"})
+
+    try:
+        if enabled:
+            # 发一个空请求让 Ollama 加载模型，keep_alive=-1 表示常驻内存
+            resp = session.post(
+                f"{OLLAMA_BASE_URL}/api/generate",
+                json={"model": model, "prompt": "", "keep_alive": -1},
+                timeout=120,
+            )
+        else:
+            # keep_alive=0 让 Ollama 立即卸载
+            resp = session.post(
+                f"{OLLAMA_BASE_URL}/api/generate",
+                json={"model": model, "prompt": "", "keep_alive": 0},
+                timeout=30,
+            )
+
+        if resp.status_code != 200:
+            err = resp.text[:300]
+            return JSONResponse(status_code=resp.status_code, content={"error": err})
+
+        return {"status": "ok", "model": model, "enabled": enabled}
+    except Exception as e:
+        return JSONResponse(status_code=502, content={"error": str(e)})
+
+
 @app.get("/metrics")
 async def get_metrics(request: Request):
     """获取监控指标（供 Dashboard 调用）"""
@@ -1490,7 +1539,23 @@ async def get_metrics(request: Request):
     by_model = db.get_model_stats()
     gpu_stats = db.get_recent_gpu_stats(limit=360)  # 每 5 秒一采样 ≈ 近 30 分钟
     latency_pct = db.get_latency_percentiles()
-    
+
+    # 获取所有可用模型（从 Ollama）和运行中模型
+    available_models = []
+    running_models = []
+    try:
+        tags_resp = session.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=5)
+        if tags_resp.ok:
+            available_models = [m["name"] for m in tags_resp.json().get("models", [])]
+    except Exception:
+        pass
+    try:
+        ps_resp = session.get(f"{OLLAMA_BASE_URL}/api/ps", timeout=5)
+        if ps_resp.ok:
+            running_models = [m["name"] for m in ps_resp.json().get("models", [])]
+    except Exception:
+        pass
+
     # 非本机访问时隐藏客户端 IP（看板对朋友开放，但 IP 不该外泄）
     if not _is_local_request(request):
         for r in recent:
@@ -1510,6 +1575,8 @@ async def get_metrics(request: Request):
         "platform": "darwin" if sys.platform == "darwin" else "other",
         "gpu_source": _GPU_SOURCE,
         "timestamp": datetime.now(timezone.utc).isoformat(),
+        "available_models": available_models,
+        "running_models": running_models,
     }
 
 

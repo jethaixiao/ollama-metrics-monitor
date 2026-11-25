@@ -83,6 +83,12 @@
         /* Responsive */
         @media(max-width:1023px){.col-split{grid-template-columns:1fr!important}}.col-split{display:grid;grid-template-columns:8fr 4fr;gap:var(--space-4)}@media(max-width:767px){.h-bar-label{width:100px}.h-bar-sub{display:none}}
 
+        /* Model Control */
+        .model-control{display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin:16px 0;padding:12px 16px;border:1px solid var(--border);border-radius:var(--r-card);background:var(--surface)}
+        .model-control select{max-width:100%;padding:5px;color:var(--text-1);background:var(--surface);border:1px solid var(--border);border-radius:6px}
+        .model-control label{display:flex;align-items:center;gap:6px;font-size:13px}
+        #modelStatus{color:var(--text-2);font-size:13px}
+
         /* ============ 手机端（≤640px）============ */
         @media (max-width:640px){
             .topbar{height:auto;min-height:52px;padding:8px 12px;gap:8px;flex-wrap:nowrap}
@@ -164,6 +170,12 @@
             <button class="view-tab" role="tab" data-view="usage" onclick="switchView('usage')">接入指引</button>
         </nav>
         <section class="panel" id="panel-monitor">
+        <!-- Model Control -->
+        <section class="model-control" aria-label="模型驻留">
+            <label for="modelSelect">模型 <select id="modelSelect" disabled></select></label>
+            <label><input id="modelSwitch" type="checkbox" role="switch" disabled>驻留内存</label>
+            <span id="modelStatus" role="status">正在获取模型状态…</span>
+        </section>
         <!-- Narrative Banner -->
 
         <div class="narrative-banner" id="narrativeBanner">
@@ -315,7 +327,7 @@ console.log(await r.json());</code></div></div><div class="tab-content" id="tab-
                 <div class="kpi-cell"><div class="text-label">P95 / P99 响应</div><div class="text-kpi">${fmtMs(lp.p95)} / ${fmtMs(lp.p99)}</div><div class="kpi-delta delta-none">每token P95 ${(lp.tpot_p95||0).toFixed(1)}ms · ${lp.count} 次</div></div>`;
             
             renderTrend(d.five_min_stats||[],d.gpu_stats||[]);
-            renderModels(d.by_model||[]);
+            renderModels(d.by_model||[], d.available_models||[], d.running_models||[]);
             renderGpuBaseline(d.gpu_stats||[]);
             renderTableSmart(d.recent_requests||[],lp);
             renderSlowest(d.recent_requests||[]);
@@ -380,10 +392,23 @@ console.log(await r.json());</code></div></div><div class="tab-content" id="tab-
             }
         }
         
-        function renderModels(data){
+        function renderModels(data, availableModels, runningModels){
             const container=document.getElementById('modelRanking');
             // unknown 表示"没解析出模型名"，不是模型，不参与排名
-            const list=(data||[]).filter(m=>m.model && m.model!=='unknown');
+            const statsMap = {};
+            (data||[]).filter(m=>m.model && m.model!=='unknown').forEach(m => { statsMap[m.model] = m; });
+
+            // 合并：所有可用模型 + 有统计的模型
+            const allModelNames = new Set([...(availableModels||[]), ...Object.keys(statsMap)]);
+            const list = [...allModelNames].map(name => ({
+                model: name,
+                request_count: statsMap[name]?.request_count || 0,
+                avg_tokens_per_second: statsMap[name]?.avg_tokens_per_second || 0,
+                avg_response_time_ms: statsMap[name]?.avg_response_time_ms || 0,
+                is_running: (runningModels||[]).includes(name),
+                has_stats: !!statsMap[name],
+            })).sort((a,b) => b.request_count - a.request_count);
+
             document.getElementById('modelBadge').textContent=list.length+' 个模型';
             if(!list.length){
                 container.innerHTML='<div class="text-meta" style="text-align:center;padding:24px">暂无数据</div>';
@@ -392,10 +417,13 @@ console.log(await r.json());</code></div></div><div class="tab-content" id="tab-
             const maxReq=Math.max(...list.map(d=>d.request_count),1);
             container.innerHTML=list.map(m=>{
                 const tps=(m.avg_tokens_per_second||0);
+                const statusDot = m.is_running
+                    ? '<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--ok);margin-right:4px" title="已加载"></span>'
+                    : '<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--border-strong);margin-right:4px" title="未加载"></span>';
                 return `<div class="h-bar-row">
-                    <div class="h-bar-label" title="${esc(m.model)}">${esc(m.model)}</div>
+                    <div class="h-bar-label" title="${esc(m.model)}">${statusDot}${esc(m.model)}</div>
                     <div class="h-bar-track"><div class="h-bar-fill" style="width:${(m.request_count/maxReq*100).toFixed(0)}%"></div></div>
-                    <div class="h-bar-value">${fmtToken(m.request_count)}</div>
+                    <div class="h-bar-value">${m.has_stats ? fmtToken(m.request_count) : '—'}</div>
                     <div class="h-bar-sub" title="平均耗时 ${fmtMs(m.avg_response_time_ms)}">${tps?tps.toFixed(0)+' tok/s':'—'}</div>
                 </div>`;
             }).join('');
@@ -713,6 +741,95 @@ console.log(await r.json());</code></div></div><div class="tab-content" id="tab-
                 }).catch(()=>showToast('清除失败','error'));
             }
         }
+
+        // === Model Control ===
+        const modelSelect = document.getElementById('modelSelect');
+        const modelSwitch = document.getElementById('modelSwitch');
+        const modelStatus = document.getElementById('modelStatus');
+        let modelOperation = false;
+        let runningModels = new Set();
+
+        async function modelRequest(path, options) {
+            const response = await fetch(path, options);
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || '模型服务不可用');
+            return data;
+        }
+
+        function showModelStatus() {
+            modelSwitch.checked = runningModels.has(modelSelect.value);
+            modelStatus.textContent = !modelSelect.value ? '无可用模型' :
+                modelSwitch.checked ? '已加载' : '未加载';
+        }
+
+        async function refreshModelStatus() {
+            if (modelOperation) return;
+            try {
+                const {models} = await modelRequest('/api/ps');
+                if (modelOperation) return;
+                runningModels = new Set(models.map(model => model.name));
+                showModelStatus();
+                modelSwitch.disabled = !modelSelect.value;
+            } catch {
+                if (modelOperation) return;
+                modelSwitch.disabled = true;
+                modelStatus.textContent = '无法获取模型状态';
+            }
+        }
+
+        async function initModelControl() {
+            try {
+                const {models} = await modelRequest('/api/tags');
+                modelSelect.replaceChildren(...models.map(({name}) => new Option(name, name)));
+                await refreshModelStatus();
+                const running = models.find(({name}) => runningModels.has(name));
+                if (running) modelSelect.value = running.name;
+                if (!modelSwitch.disabled) showModelStatus();
+                modelSelect.disabled = !models.length;
+                setInterval(() => {
+                    if (!document.hidden) refreshModelStatus();
+                }, 5000);
+            } catch {
+                modelStatus.textContent = '无法获取模型列表';
+            }
+        }
+
+        modelSelect.addEventListener('change', () => {
+            if (!modelSwitch.disabled) showModelStatus();
+            refreshModelStatus();
+        });
+
+        modelSwitch.addEventListener('change', async () => {
+            const model = modelSelect.value;
+            const enabled = modelSwitch.checked;
+            modelOperation = true;
+            modelSelect.disabled = modelSwitch.disabled = true;
+            modelStatus.textContent = enabled ? '正在加载…' : '正在卸载…';
+            try {
+                await modelRequest('/api/model-residency', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json', 'X-Model-Control': '1'},
+                    body: JSON.stringify({model, enabled})
+                });
+                for (let attempt = 0; attempt < 30; attempt++) {
+                    const {models} = await modelRequest('/api/ps');
+                    runningModels = new Set(models.map(item => item.name));
+                    if (runningModels.has(model) === enabled) {
+                        showModelStatus();
+                        return;
+                    }
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+                throw new Error('等待模型状态变化超时');
+            } catch (error) {
+                modelSwitch.checked = runningModels.has(model);
+                modelStatus.textContent = error.message;
+                showToast(error.message, 'error');
+            } finally {
+                modelOperation = false;
+                modelSelect.disabled = modelSwitch.disabled = false;
+            }
+        });
         
         // Auto refresh with visibility awareness
         let autoTimer=null;function startAutoRefresh(){stopAutoRefresh();autoTimer=setInterval(loadData,30000)}function stopAutoRefresh(){if(autoTimer){clearInterval(autoTimer);autoTimer=null}}
@@ -734,6 +851,7 @@ console.log(await r.json());</code></div></div><div class="tab-content" id="tab-
             const qView = new URLSearchParams(location.search).get('view') || location.hash.replace('#','');
             const savedView = localStorage.getItem('view');
             switchView(qView==='usage' || savedView==='usage' ? 'usage' : 'monitor');
+            initModelControl();
             loadData();startAutoRefresh();
         });
     </script>
