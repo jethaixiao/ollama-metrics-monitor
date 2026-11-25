@@ -266,7 +266,7 @@
         <div class="section api-section"><details open><summary><svg class="api-bolt" viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z"/></svg><span class="api-title">怎么用这个看板</span><span class="api-subtitle">客户端里填下面这四项，调用就会自动被统计</span></summary><div class="api-content"><div class="api-url-row"><code id="apiUrlCode">__BASE__/v1/chat/completions</code><button class="btn btn-secondary" onclick="copyApiUrl()">复制</button></div><dl class="field-hints">
 <div><dt>本机地址</dt><dd><code class="url">__LOCAL_BASE__</code><span class="fh-note">跑在这台机器上的 DSH / 脚本用这个，不需要 Token</span></dd></div>
 <div><dt>公网地址</dt><dd><code class="url">__BASE__/v1</code><span class="fh-note">别的设备用这个，必须带 Token；只收完整路径时填 <code class="url">__BASE__/v1/chat/completions</code></span></dd></div>
-<div><dt>模型名称</dt><dd><code>qwen2.5:7b</code> <code>qwen3:14b</code> <code>qwen3:14b-abliterated</code> <code>deepseek-r1:14b</code><span class="fh-note">必须是 ollama list 里的全名</span></dd></div>
+<div><dt>模型名称</dt><dd id="usageModelChips"><code>自动同步本机模型列表…</code><span class="fh-note">必须是 ollama list 里的全名，下面自动列出当前可用模型</span></dd></div>
 <div><dt>API Token</dt><dd><code id="apiToken" class="mono-token">__ACCESS_CODE__</code><button class="mini-btn" onclick="copyToken()">复制</button><span class="fh-note">客户端里的 API Key 字段就填这串；公网调用放 Authorization: Bearer；页面登录用的也是它</span></dd></div>
 <div><dt>命令行</dt><dd><code class="cli">curl -s __BASE__/v1/chat/completions \
   -H 'Content-Type: application/json' \
@@ -387,6 +387,26 @@ console.log(await r.json());</code></div></div><div class="tab-content" id="tab-
             renderGpuBaseline(d.gpu_stats||[]);
             renderTableSmart(d.recent_requests||[],lp);
             renderSlowest(d.slowest_by_model||d.recent_requests||[]);
+            refreshUsageModels(d.available_models||[]);
+        }
+
+        // 接入指引：模型名与示例代码动态同步本机模型列表
+        let _usageModelUpdated=false;
+        function refreshUsageModels(models){
+            if(!models.length) return;
+            const host=document.getElementById('usageModelChips');
+            if(host){
+                host.innerHTML = models.map(m=>`<code>${esc(m)}</code>`).join(' ')
+                    + '<span class="fh-note">必须是 ollama list 里的全名（自动同步本机模型列表）</span>';
+            }
+            // 示例代码里的模型名只在首次同步时替换一次（避免反复刷新抖动）
+            if(!_usageModelUpdated){
+                const m=models[0];
+                document.querySelectorAll('#panel-usage .code-block code, #panel-usage code.cli').forEach(c=>{
+                    c.textContent=c.textContent.replace(/qwen2\.5:7b/g,m);
+                });
+                _usageModelUpdated=true;
+            }
         }
         
         function chartColors(){const dk=document.documentElement.classList.contains('dark');const cs=getComputedStyle(document.documentElement);return{grid:cs.getPropertyValue('--grid').trim(),tick:cs.getPropertyValue('--text-3').trim(),series:cs.getPropertyValue('--series-1').trim(),accent:cs.getPropertyValue('--accent').trim(),surface:dk?cs.getPropertyValue('--surface').trim():'#fff',ok:cs.getPropertyValue('--ok').trim(),warn:cs.getPropertyValue('--warn').trim(),danger:cs.getPropertyValue('--danger').trim()}}
