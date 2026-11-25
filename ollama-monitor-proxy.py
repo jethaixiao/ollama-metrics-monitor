@@ -449,6 +449,36 @@ class MetricsDB:
         conn.close()
         return [dict(r) for r in rows]
     
+    def get_slowest_per_model(self, per_model: int = 2, max_models: int = 4) -> list:
+        """每个模型最慢的 N 次请求（成功且有记录的）。
+
+        与全局 Top N 不同：给每个模型"出镜权"，避免大模型/高频模型刷屏。
+        组间按该模型最慢一次的耗时降序，最多返回 max_models 组。
+        """
+        conn = self._get_conn()
+        rows = conn.execute("""
+            SELECT * FROM (
+                SELECT *, ROW_NUMBER() OVER (
+                    PARTITION BY model ORDER BY response_time_ms DESC
+                ) AS rn
+                FROM request_logs
+                WHERE success = 1 AND response_time_ms > 0
+            ) WHERE rn <= ?
+        """, (per_model,)).fetchall()
+        conn.close()
+
+        groups: dict = {}
+        for r in rows:
+            groups.setdefault(r["model"], []).append(dict(r))
+        # 组间按该模型最慢一次排序
+        ordered = sorted(groups.values(),
+                         key=lambda g: max(x["response_time_ms"] for x in g),
+                         reverse=True)
+        result = []
+        for g in ordered[:max_models]:
+            result.extend(sorted(g, key=lambda x: x["response_time_ms"], reverse=True))
+        return result
+
     def get_hourly_stats(self, hours: int = 24) -> list:
         """获取最近 N 小时的小时级统计"""
         conn = self._get_conn()
@@ -2088,6 +2118,7 @@ async def get_metrics(request: Request):
     """获取监控指标（供 Dashboard 调用）"""
     cumulative = db.get_cumulative_stats()
     recent = db.get_recent_requests(limit=20)
+    slowest_by_model = db.get_slowest_per_model(per_model=2, max_models=4)
     hourly = db.get_hourly_stats(hours=24)
     five_min = db.get_five_min_stats(minutes=120)
     by_model = db.get_model_stats()
@@ -2121,6 +2152,7 @@ async def get_metrics(request: Request):
     return {
         "cumulative": cumulative,
         "recent_requests": recent,
+        "slowest_by_model": slowest_by_model,
         "hourly_stats": hourly,
         "five_min_stats": five_min,
         "by_model": by_model,

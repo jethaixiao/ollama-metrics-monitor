@@ -103,6 +103,32 @@ check("HF 文件树拿到 GGUF 列表", bool(ggufs and len(ggufs) >= 2), f"{gguf
 check("HF 文件条目 size>0", all(g["size_bytes"] > 0 for g in (ggufs or [])))
 check("不存在的仓库返回 None", proxy._hf_repo_ggufs("no-such-repo-xyz-abc/GGUF") is None)
 
+print("== 3c. get_slowest_per_model（临时库）==")
+import tempfile, os as _os
+_tmpdb = _os.path.join(tempfile.mkdtemp(), "t.db")
+tdb = proxy.MetricsDB(_tmpdb)
+def _rec(model, ms, success=True, total_ms=None):
+    return {"model": model, "response_time_ms": ms, "success": success,
+            "total_ms": total_ms if total_ms is not None else ms,
+            "load_ms": 0, "prompt_eval_ms": 0, "eval_ms": ms, "completion_tokens": 1}
+# 构造：big 模型 3 条（含 1 失败）、small 模型 2 条、mid 模型 1 条
+tdb.log_request(_rec("big", 10000)); tdb.log_request(_rec("big", 30000))
+tdb.log_request(_rec("big", 20000)); tdb.log_request(_rec("big", 99999, success=False))
+tdb.log_request(_rec("small", 500)); tdb.log_request(_rec("small", 1500))
+tdb.log_request(_rec("mid", 5000))
+slow = tdb.get_slowest_per_model(per_model=2, max_models=4)
+names = [r["model"] for r in slow]
+check("每模型最多 2 条", all(names.count(m) <= 2 for m in set(names)), str(names))
+check("组间按最慢降序：big 在前", names[0] == "big" and names[0] != "small", str(names))
+check("big 组含 30000 和 20000（排除失败 99999）",
+      {r["response_time_ms"] for r in slow if r["model"] == "big"} == {30000, 20000})
+check("组数上限生效（3 模型 ≤ 4）", len({r['model'] for r in slow}) <= 4)
+check("组内降序", all(slow[i]["response_time_ms"] >= slow[i+1]["response_time_ms"]
+                     for i in range(len(slow)-1)
+                     if names[i] == names[i+1]))
+slow2 = tdb.get_slowest_per_model(per_model=2, max_models=1)
+check("max_models=1 只剩一组", len({r['model'] for r in slow2}) == 1 and slow2[0]["model"] == "big")
+
 print("== 4. system_specs 结构 ==")
 s = proxy.system_specs()
 check("有 cpu 字段", bool(s.get("cpu")))
