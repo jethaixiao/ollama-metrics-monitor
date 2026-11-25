@@ -245,12 +245,16 @@
         <!-- 在线模型库 -->
         <div class="section"><div class="card">
             <div class="card-header"><span class="text-label">在线模型库（ollama.com）</span><span class="text-meta" id="onlineBadge">联网时可用</span></div>
-            <div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-4)">
+            <div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-2)">
                 <input id="onlineSearchInput" type="search" placeholder="搜索模型，如 qwen3、gemma、deepseek…"
                     style="flex:1;padding:8px 12px;border:1px solid var(--border);border-radius:var(--r-btn);background:var(--surface);color:var(--text-1);font-size:13px"
                     onkeydown="if(event.key==='Enter')searchOnline()">
                 <button class="btn btn-primary" onclick="searchOnline()">搜索</button>
                 <button class="btn btn-secondary" onclick="searchOnline('')">热门</button>
+            </div>
+            <div style="display:flex;gap:6px;margin-bottom:var(--space-4)" id="searchSourceTabs">
+                <button class="view-tab active" data-src="ollama" onclick="setSearchSource('ollama')" title="官方精选，名字短，开箱即用">Ollama 官方库</button>
+                <button class="view-tab" data-src="hf" onclick="setSearchSource('hf')" title="Hugging Face 全量 GGUF，45万+，可选量化">Hugging Face</button>
             </div>
             <div id="onlineModelsGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:var(--space-3)">
                 <div class="text-meta" style="padding:8px">点击「热门」浏览或输入关键词搜索。下载前会自动根据本机配置打上 ✅可运行 / ⚠️内存紧张 / ❌不支持 标签。</div>
@@ -828,24 +832,33 @@ console.log(await r.json());</code></div></div><div class="tab-content" id="tab-
             loadSpecs();
         }
 
+        let searchSource = 'ollama';
+        function setSearchSource(src){
+            searchSource = src;
+            document.querySelectorAll('#searchSourceTabs .view-tab').forEach(b=>
+                b.classList.toggle('active', b.dataset.src===src));
+            searchOnline('');
+        }
+
         async function searchOnline(q){
             if(q===undefined) q = (document.getElementById('onlineSearchInput')||{}).value || '';
             const grid = document.getElementById('onlineModelsGrid');
             grid.innerHTML = '<div class="text-meta" style="padding:8px">正在'+(q?'搜索“'+esc(q)+'”':'获取热门模型')+'…</div>';
             try{
-                const r = await fetch('/api/models/search?q='+encodeURIComponent(q||'')+'&limit=40');
+                const r = await fetch('/api/models/search?q='+encodeURIComponent(q||'')+'&limit=40&source='+searchSource);
                 if(!r.ok){ const d=await r.json().catch(()=>({})); throw new Error(d.error||'HTTP '+r.status); }
                 const d = await r.json();
-                document.getElementById('onlineBadge').textContent = `${d.count} 个模型 · ollama.com`;
+                document.getElementById('onlineBadge').textContent = `${d.count} 个模型 · ${d.source==='hf'?'huggingface.co':'ollama.com'}`;
                 if(!d.models.length){ grid.innerHTML='<div class="text-meta" style="padding:8px">没有匹配的模型</div>'; return; }
                 grid.innerHTML = d.models.map(m=>{
                     const sizeTags = m.sizes.map(s=>`<span class="tag-badge tag-info">${esc(s)}</span>`).join('');
                     const capTags = m.capabilities.map(c=>`<span class="tag-badge tag-info">${esc(c)}</span>`).join('');
+                    const likes = m.likes!==undefined ? ` · ♥ ${m.likes}` : '';
                     return `<div class="model-card" id="online-card-${esc(m.name)}">
                         <div class="model-card-name">${esc(m.name)}</div>
                         <div class="model-card-desc">${esc(m.description)}</div>
                         <div style="display:flex;gap:6px;flex-wrap:wrap">${capTags}${sizeTags}</div>
-                        <div class="model-card-meta">${esc(m.pulls)} Pulls · 更新于 ${esc(m.updated)}</div>
+                        <div class="model-card-meta">${esc(m.pulls)} Pulls${likes} · 更新于 ${esc(m.updated)}</div>
                         <div class="model-card-actions" id="online-actions-${esc(m.name)}">
                             <button class="btn btn-secondary" onclick="checkCompat('${esc(m.name)}')">检测可运行性</button>
                         </div>
@@ -862,28 +875,111 @@ console.log(await r.json());</code></div></div><div class="tab-content" id="tab-
             if(!host) return;
             host.innerHTML = '<span class="text-meta">正在查询模型大小与本机兼容性…</span>';
             try{
-                const r = await fetch('/api/models/compat?name='+encodeURIComponent(name+':latest'));
+                // ollama 源补 latest tag；hf.co/... 名字由后端解析量化文件
+                const qname = name.includes(':') ? name : (name.startsWith('hf.co/') ? name : name+':latest');
+                const r = await fetch('/api/models/compat?name='+encodeURIComponent(qname));
                 const d = await r.json();
                 if(!r.ok) throw new Error(d.error||'HTTP '+r.status);
                 const cls = d.verdict==='ok'?'tag-ok':d.verdict==='tight'?'tag-tight':'tag-no';
-                const tagNames = ['latest'].concat([]);
+                let quantBtns = '';
+                if(d.quants && d.quants.length){
+                    // 渲染前 6 个常见量化按钮，选中的那个标亮
+                    const show = d.quants.slice(0,6);
+                    quantBtns = show.map(q=>{
+                        const on = d.model.endsWith(':'+q);
+                        return `<button class="btn ${on?'btn-primary':'btn-secondary'}" style="padding:2px 8px;font-size:12px"
+                            title="${d.size_gb} GB · ${esc(d.label)}"
+                            onclick="checkCompatQuant('${esc(name)}','${esc(q)}')">${esc(q)}</button>`;
+                    }).join('');
+                }
+                const dl = d.model;   // compat 返回最终可下载名（hf.co/...:Q4_K_M）
                 host.innerHTML = `
                     <span class="tag-badge ${cls}" title="${esc(d.reason)}">${d.label} · ${d.size_gb} GB</span>
-                    <button class="btn btn-secondary" title="${esc(d.reason)}" onclick="startPull('${esc(name)}','latest')">下载 latest</button>`;
+                    ${quantBtns || `<button class="btn btn-secondary" title="${esc(d.reason)}" onclick="startPullName('${esc(dl)}')">下载</button>`}
+                    ${quantBtns ? '' : ''}`;
+                // 量化模式下额外给一个用选中量化直接下载的按钮
+                if(d.quants && d.quants.length){
+                    host.insertAdjacentHTML('beforeend',
+                        `<button class="btn btn-secondary" title="${esc(d.reason)}" onclick="startPullName('${esc(dl)}')">下载 ${esc(d.model.split(':').pop())}</button>`);
+                }
             }catch(e){
                 host.innerHTML = `<span class="text-meta" style="color:var(--danger)">${esc(e.message)}</span>
                     <button class="btn btn-secondary" onclick="checkCompat('${esc(name)}')">重试</button>`;
             }
         }
 
+        async function checkCompatQuant(name, quant){
+            const host = document.getElementById('online-actions-'+CSS.escape(name));
+            if(host) host.innerHTML = '<span class="text-meta">查询 '+esc(quant)+' 大小…</span>';
+            const qname = name.startsWith('hf.co/') ? name+':'+quant : name+':'+quant;
+            await checkCompat(qname);
+        }
+
+        // 统一入口：startPullName('hf.co/user/repo:Q4_K_M') 或 startPull('name','tag')
+        async function startPullName(full){
+            const i = full.lastIndexOf(':');
+            const name = i>0 ? full.slice(0,i) : full;
+            const tag = i>0 ? full.slice(i+1) : 'latest';
+            await startPull(name, tag);
+        }
+
         async function startPull(name, tag){
             const full = name+':'+tag;
             if(pullingNames.has(full)) return;
+            const isHf = name.startsWith('hf.co/');
             pullingNames.add(full);
-            const card = document.getElementById('online-card-'+CSS.escape(name));
             const host = document.getElementById('online-actions-'+CSS.escape(name));
             if(host) host.innerHTML = `<div style="flex:1"><div class="text-meta" id="pull-status-${CSS.escape(full)}">准备下载…</div>
                 <div class="pull-progress"><div class="pull-progress-fill" id="pull-bar-${CSS.escape(full)}" style="width:0%"></div></div></div>`;
+
+            const setUI = (text, pct) => {
+                const st = document.getElementById('pull-status-'+CSS.escape(full));
+                const bar = document.getElementById('pull-bar-'+CSS.escape(full));
+                if(st) st.textContent = text;
+                if(bar && pct!==null && pct!==undefined) bar.style.width = pct+'%';
+            };
+            const finishUI = (ok, msg) => {
+                if(host) host.innerHTML = ok
+                    ? `<span class="tag-badge tag-ok">✅ 已下载</span>
+                       <button class="btn btn-primary" onclick="modelAction('${esc(full)}','load')">立即加载</button>`
+                    : `<small class="err" style="font-size:12px">${esc(msg||'失败')}</small>
+                       <button class="btn btn-secondary" onclick="startPull('${esc(name)}','${esc(tag)}')">重试</button>`;
+            };
+
+            // HF 源：后台任务 + 轮询（浏览器断开不影响下载）
+            if(isHf){
+                try{
+                    const r = await fetch('/api/models/pull',{method:'POST',
+                        headers:{'Content-Type':'application/json'},
+                        body:JSON.stringify({name:full})});
+                    const d = await r.json();
+                    if(!r.ok) throw new Error(d.error||'HTTP '+r.status);
+                    for(;;){
+                        await new Promise(res=>setTimeout(res, 1500));
+                        const s = await (await fetch('/api/models/pull/status?name='+encodeURIComponent(full))).json();
+                        if(s.error){ throw new Error(s.error); }
+                        const pct = s.total? Math.round(s.completed/s.total*100) : null;
+                        setUI(`${s.status}${pct!==null?`（${_fmtSize(s.completed)} / ${_fmtSize(s.total)}）`:''}`, pct);
+                        if(s.finished){
+                            if(s.status==='success'){
+                                showToast(`模型 ${full} 下载完成`);
+                                setUI('✅ 下载完成', 100);
+                                finishUI(true);
+                            } else { throw new Error(s.error||'下载失败'); }
+                            break;
+                        }
+                    }
+                }catch(e){
+                    showToast(e.message,'error');
+                    finishUI(false, e.message);
+                }finally{
+                    pullingNames.delete(full);
+                    refreshLocalModels();
+                }
+                return;
+            }
+
+            // Ollama 源：流式读取
             try{
                 const resp = await fetch('/api/models/pull',{method:'POST',
                     headers:{'Content-Type':'application/json'},
@@ -903,23 +999,14 @@ console.log(await r.json());</code></div></div><div class="tab-content" id="tab-
                         let msg; try{ msg=JSON.parse(line); }catch{ continue; }
                         if(msg.error){ throw new Error(msg.error); }
                         const pct = msg.total? Math.round(msg.completed/msg.total*100) : null;
-                        const st = document.getElementById('pull-status-'+CSS.escape(full));
-                        const bar = document.getElementById('pull-bar-'+CSS.escape(full));
-                        if(st){
-                            if(msg.status==='success'){ st.textContent='✅ 下载完成'; }
-                            else if(pct!==null){ st.textContent=`${msg.status} ${pct}%（${_fmtSize(msg.completed)} / ${_fmtSize(msg.total)}）`; }
-                            else{ st.textContent=msg.status; }
-                        }
-                        if(bar && pct!==null) bar.style.width=pct+'%';
+                        setUI(`${msg.status}${pct!==null?`（${_fmtSize(msg.completed)} / ${_fmtSize(msg.total)}）`:''}`, pct);
                     }
                 }
                 showToast(`模型 ${full} 下载完成`);
-                if(host) host.innerHTML = `<span class="tag-badge tag-ok">✅ 已下载</span>
-                    <button class="btn btn-primary" onclick="modelAction('${esc(full)}','load')">立即加载</button>`;
+                finishUI(true);
             }catch(e){
                 showToast(e.message,'error');
-                if(host) host.innerHTML = `<small class="err" style="font-size:12px">${esc(e.message)}</small>
-                    <button class="btn btn-secondary" onclick="startPull('${esc(name)}','${esc(tag)}')">重试</button>`;
+                finishUI(false, e.message);
             }finally{
                 pullingNames.delete(full);
                 refreshLocalModels();

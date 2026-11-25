@@ -7,6 +7,10 @@ import sys
 import types
 from pathlib import Path
 
+# HF 直连在国内不稳，测试统一走镜像（proxy 在 import 时读取该环境变量）
+import os
+os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 # import 前先固定测试环境变量（避免读到真实 config 之外的副作用也无妨，只读不写）
@@ -89,6 +93,15 @@ print("== 3. _registry_manifest_size（真实网络）==")
 size = proxy._registry_manifest_size("qwen2.5", "0.5b")
 check("qwen2.5:0.5b 大小在 0.2~2GB", bool(size and 0.2 * GB < size < 2 * GB), f"{size and size/GB:.2f} GB")
 check("不存在模型返回 None", proxy._registry_manifest_size("no-such-model-xyz", "latest") is None)
+
+print("== 3b. Hugging Face 辅助函数 ==")
+check("_hf_quant_of 提取 Q4_K_M", proxy._hf_quant_of("Qwen3-8B-Q4_K_M.gguf") == "Q4_K_M")
+check("_hf_quant_of 提取 Q8_0", proxy._hf_quant_of("model.Q8_0.gguf") == "Q8_0")
+check("_hf_quant_of 带子目录", proxy._hf_quant_of("sub/dir/X-IQ4_XS.gguf") == "IQ4_XS")
+ggufs = proxy._hf_repo_ggufs("unsloth/Qwen3-0.6B-GGUF")
+check("HF 文件树拿到 GGUF 列表", bool(ggufs and len(ggufs) >= 2), f"{ggufs and len(ggufs)}")
+check("HF 文件条目 size>0", all(g["size_bytes"] > 0 for g in (ggufs or [])))
+check("不存在的仓库返回 None", proxy._hf_repo_ggufs("no-such-repo-xyz-abc/GGUF") is None)
 
 print("== 4. system_specs 结构 ==")
 s = proxy.system_specs()

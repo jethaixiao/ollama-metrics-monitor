@@ -1539,6 +1539,9 @@ async def model_residency(request: Request):
 
 _specs_cache: dict = {"data": None, "ts": 0.0}
 
+# Hugging Face 端点（国内可用 HF_ENDPOINT=https://hf-mirror.com 覆盖）
+HF_ENDPOINT = os.environ.get("HF_ENDPOINT", "https://huggingface.co").rstrip("/")
+
 
 def _run_sysctl(key: str) -> str:
     try:
@@ -1649,9 +1652,47 @@ def _parse_library_page(html: str, limit: int) -> list:
     return models
 
 
+def _search_hf(q: str, limit: int) -> dict:
+    """搜索 Hugging Face Hub 上的 GGUF 模型（名字可直接用于 ollama pull hf.co/...）。"""
+    try:
+        params = f"limit={limit}&sort=downloads&direction=-1&filter=gguf"
+        if q:
+            url = f"{HF_ENDPOINT}/api/models?search={quote(q)}&{params}"
+        else:
+            url = f"{HF_ENDPOINT}/api/models?{params}"
+        resp = requests.get(url, timeout=15,
+                            headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"})
+        resp.raise_for_status()
+        models = []
+        for item in resp.json():
+            mid = item.get("modelId", "")
+            if not mid:
+                continue
+            tags = item.get("tags", []) or []
+            models.append({
+                "name": f"hf.co/{mid}",
+                "description": ", ".join([t for t in tags if not t.startswith("/")])[:120],
+                "capabilities": [t for t in ("text-generation", "mlx", "vision", "image-text-to-text") if t in tags],
+                "sizes": [],
+                "pulls": f"{item.get('downloads', 0):,}",
+                "updated": (item.get("lastModified") or "")[:10],
+                "likes": item.get("likes", 0),
+                "source": "hf",
+            })
+        return {"online": True, "source": "hf", "query": q, "count": len(models), "models": models}
+    except Exception as e:
+        return JSONResponse(status_code=503, content={
+            "error": f"Hugging Face 不可达（可设 HF_ENDPOINT=https://hf-mirror.com 走镜像）",
+            "detail": str(e)[:200],
+            "online": False,
+        })
+
+
 @app.get("/api/models/search")
-def search_online_models(q: str = "", limit: int = 40):
-    """搜索 Ollama 在线模型库（需联网；离线返回 503 由前端降级提示）。"""
+def search_online_models(q: str = "", limit: int = 40, source: str = "ollama"):
+    """搜索在线模型库。source=ollama（默认，ollama.com 精选）或 hf（Hugging Face 全量）。"""
+    if source == "hf":
+        return _search_hf(q, max(1, min(limit, 100)))
     try:
         if q:
             url = f"https://ollama.com/search?q={quote(q)}"
@@ -1665,7 +1706,9 @@ def search_online_models(q: str = "", limit: int = 40):
         if q:
             kw = q.lower().strip()
             models = [m for m in models if kw in m["name"].lower()]
-        return {"online": True, "query": q, "count": len(models), "models": models}
+        for m in models:
+            m["source"] = "ollama"
+        return {"online": True, "source": "ollama", "query": q, "count": len(models), "models": models}
     except Exception as e:
         return JSONResponse(status_code=503, content={
             "error": "在线模型库不可达（离线或网络受限）",
@@ -1740,9 +1783,75 @@ def _evaluate_compat(size_bytes: int, specs: dict) -> dict:
     return {"verdict": verdict, "label": level, "reason": reason}
 
 
+def _hf_repo_ggufs(repo: str) -> Optional[list]:
+    """列出 HF 仓库里的 GGUF 文件（路径 + 真实大小）。"""
+    try:
+        r = requests.get(f"{HF_ENDPOINT}/api/models/{repo}/tree/main", timeout=15,
+                         headers={"User-Agent": "Mozilla/5.0"})
+        if r.status_code != 200:
+            return None
+        ggufs = []
+        for f in r.json():
+            p = f.get("path", "")
+            if p.lower().endswith(".gguf"):
+                size = (f.get("lfs") or {}).get("size") or f.get("size", 0)
+                ggufs.append({"file": p, "size_bytes": size})
+        return ggufs or None
+    except Exception:
+        return None
+
+
+def _hf_quant_of(filename: str) -> str:
+    """从 GGUF 文件名提取量化标签。
+
+    兼容两种命名：Qwen3-8B-Q4_K_M.gguf → Q4_K_M；model.Q8_0.gguf → Q8_0
+    """
+    base = filename.rsplit("/", 1)[-1]
+    stem = base[:-5] if base.lower().endswith(".gguf") else base
+    tail = stem.rsplit("-", 1)[-1]
+    if "." in tail:                     # 无 - 分隔时如 model.Q8_0
+        tail = tail.rsplit(".", 1)[-1]
+    return tail.strip()
+
+
+def _compat_hf(name: str) -> JSONResponse:
+    """评估 hf.co/{user}/{repo}[:quant] 的可运行性（HF 文件树取真实大小）。"""
+    path = name[len("hf.co/"):]
+    repo, _, quant = path.partition(":")
+    quant = quant.strip()
+    ggufs = _hf_repo_ggufs(repo)
+    if not ggufs:
+        return JSONResponse(status_code=404, content={
+            "error": f"未找到 {repo} 的 GGUF 文件（该仓库可能只有 safetensors，或不可达）"})
+
+    def find(q: str):
+        for g in ggufs:
+            if q.lower() in _hf_quant_of(g["file"]).lower():
+                return g
+        return None
+
+    chosen = find(quant) if quant else (find("Q4_K_M") or ggufs[0])
+    quants = sorted({_hf_quant_of(g["file"]) for g in ggufs})
+
+    specs = system_specs()
+    result = _evaluate_compat(chosen["size_bytes"], specs)
+    return JSONResponse(content={
+        "model": f"hf.co/{repo}:{_hf_quant_of(chosen['file'])}",
+        "source": "hf",
+        "size_bytes": chosen["size_bytes"],
+        "size_gb": round(chosen["size_bytes"] / 1024**3, 1),
+        "quants": quants,
+        "specs": {k: specs.get(k) for k in ("cpu", "is_apple_silicon", "memory_total", "memory_available", "disk_free")},
+        **result,
+    })
+
+
 @app.get("/api/models/compat")
 def model_compat(name: str):
-    """评估 name[:tag] 在本机的可运行性（联网查 registry manifest）。"""
+    """评估 name[:tag] 在本机的可运行性（联网查 manifest / HF 文件树）。"""
+    if name.startswith("hf.co/"):
+        return _compat_hf(name)
+
     if "/" in name:
         repo_full, _, tag = name.partition(":")
         repo = repo_full.split("/")[-1]
@@ -1768,7 +1877,13 @@ def model_compat(name: str):
 
 @app.post("/api/models/pull")
 async def pull_model(request: Request):
-    """下载模型：流式转发 Ollama /api/pull 进度（NDJSON）。仅限本机。"""
+    """下载模型。仅限本机。
+
+    hf.co/{user}/{repo}[:quant] → 后台线程「看板代理下载 → blob 上传 → create 导入」，
+    进度通过 GET /api/models/pull/status 轮询（浏览器断开不影响下载）。
+    其他名字 → 流式转发 Ollama /api/pull（同时记录进度到 _pull_jobs）。
+    Ollama 内置 HF 拉取硬编码 huggingface.co（国内 DNS 污染不可用），故 HF 走代理下载。
+    """
     if not _is_local_request(request) or not _is_same_origin(request):
         return JSONResponse(status_code=403, content={"error": "下载仅限本机操作"})
     try:
@@ -1779,21 +1894,172 @@ async def pull_model(request: Request):
     if not name:
         return JSONResponse(status_code=400, content={"error": "name is required"})
 
+    if name.startswith("hf.co/"):
+        info = _hf_resolve_gguf(name)
+        if not info:
+            return JSONResponse(status_code=404, content={
+                "error": f"未找到 {name} 对应的 GGUF 文件（或 HF 不可达）"})
+        repo, gguf_path, size_bytes, quant = info
+        model_name = f"hf.co/{repo}:{quant}"
+        job = _pull_jobs.get(model_name)
+        if job and not job["finished"]:
+            return {"status": "already_running", "job": model_name}
+        _pull_jobs[model_name] = {"status": "starting", "completed": 0,
+                                  "total": size_bytes, "error": None,
+                                  "finished": False, "phase": "download"}
+        threading.Thread(target=_hf_pull_worker,
+                         args=(repo, gguf_path, size_bytes, model_name),
+                         daemon=True).start()
+        return {"status": "started", "job": model_name, "total": size_bytes}
+
+    # 追踪 ollama 源下载：用事件流实时喂 job 状态（前端兼容两种读取方式）
+    job = _pull_jobs.get(name)
+    if job and not job["finished"]:
+        return {"status": "already_running", "job": name}
+    _pull_jobs[name] = {"status": "starting", "completed": 0, "total": 0,
+                        "error": None, "finished": False, "phase": "download"}
+
     def stream():
+        job_state = _pull_jobs[name]
         try:
             with session.post(f"{OLLAMA_BASE_URL}/api/pull",
                               json={"name": name, "stream": True},
                               stream=True, timeout=(10, 7200)) as r:
                 if r.status_code != 200:
-                    yield json.dumps({"error": f"Ollama pull HTTP {r.status_code}"}).encode() + b"\n"
+                    job_state.update(error=f"Ollama pull HTTP {r.status_code}", finished=True)
+                    yield json.dumps({"error": job_state["error"]}).encode() + b"\n"
                     return
                 for line in r.iter_lines():
-                    if line:
-                        yield line.encode() + b"\n"
+                    if line:            # iter_lines 返回 bytes
+                        try:
+                            msg = json.loads(line)
+                            job_state.update(status=msg.get("status", ""),
+                                             completed=msg.get("completed", 0) or 0,
+                                             total=msg.get("total", 0) or 0)
+                            if msg.get("error"):
+                                job_state.update(error=msg["error"])
+                        except Exception:
+                            pass
+                        yield line if line.endswith(b"\n") else line + b"\n"
+            job_state.update(finished=True, status="success")
         except Exception as e:
+            job_state.update(error=str(e)[:300], finished=True)
             yield json.dumps({"error": str(e)[:300]}).encode() + b"\n"
 
     return StreamingResponse(stream(), media_type="application/x-ndjson")
+
+
+_pull_jobs: dict = {}   # name -> {status, completed, total, error, finished, phase}
+
+
+@app.get("/api/models/pull/status")
+def pull_status(name: str = ""):
+    """查询后台下载任务进度。name 缺省返回全部任务。"""
+    if name:
+        job = _pull_jobs.get(name)
+        if not job:
+            return JSONResponse(status_code=404, content={"error": "无此下载任务"})
+        return {"job": name, **job}
+    return {"jobs": [{"job": k, **v} for k, v in _pull_jobs.items()]}
+
+
+def _hf_pull_worker(repo: str, gguf_path: str, size_bytes: int, model_name: str):
+    """后台下载 HF GGUF → blob 上传 → create 导入。进度写 _pull_jobs。"""
+    import hashlib
+    import tempfile
+    job = _pull_jobs[model_name]
+    tmpdir = tempfile.mkdtemp(prefix="ollama-hf-")
+    tmpfile = os.path.join(tmpdir, gguf_path.rsplit("/", 1)[-1])
+    try:
+        url = f"{HF_ENDPOINT}/{repo}/resolve/main/{quote(gguf_path)}"
+        # HF CDN 国内连通性不稳定：代理（若配置）与直连交替轮换重试，带断点续传
+        hf_proxy = os.environ.get("HF_PROXY", "").strip()
+        proxy_cfg = {"http": hf_proxy, "https": hf_proxy} if hf_proxy else None
+        plans = ([proxy_cfg, None] * 4) if proxy_cfg else [None] * 4
+        done = 0
+        with open(tmpfile, "wb") as f:
+            for attempt, proxies in enumerate(plans, 1):
+                try:
+                    job.update(status=f"downloading {gguf_path}（{'代理' if proxies else '直连'}）",
+                               phase="download")
+                    headers = {"User-Agent": "Mozilla/5.0"}
+                    if done:
+                        headers["Range"] = f"bytes={done}-"
+                    with requests.get(url, stream=True, timeout=(20, 60),
+                                      headers=headers, allow_redirects=True,
+                                      proxies=proxies) as r:
+                        if r.status_code not in (200, 206):
+                            raise RuntimeError(f"HTTP {r.status_code}")
+                        total = int(r.headers.get("content-length", 0) or 0)
+                        if r.status_code == 200 and done:   # 不支持续传则重下
+                            done = 0; f.seek(0); f.truncate()
+                        if total and done and r.status_code == 206:
+                            total += done
+                        total = total or size_bytes
+                        job.update(total=total)
+                        for chunk in r.iter_content(chunk_size=1 << 20):
+                            if chunk:
+                                f.write(chunk)
+                                done += len(chunk)
+                                job.update(completed=done)
+                    break   # 下载完成
+                except Exception as e:
+                    if attempt == len(plans):
+                        raise
+                    tag = "代理" if proxies else "直连"
+                    job.update(status=f"{tag}下载中断，自动切换重试…")
+                    time.sleep(2)
+
+        job.update(status="importing into ollama…", phase="import")
+        # 1) SHA256 + 上传 blob
+        h = hashlib.sha256()
+        with open(tmpfile, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 22), b""):
+                h.update(chunk)
+        sha = h.hexdigest()
+        with open(tmpfile, "rb") as f:
+            up = session.post(f"{OLLAMA_BASE_URL}/api/blobs/sha256:{sha}",
+                              data=f, timeout=(15, 3600))
+        if up.status_code not in (200, 201):
+            raise RuntimeError(f"blob 上传失败 HTTP {up.status_code}: {up.text[:200]}")
+        # 2) create 模型
+        payload = {"model": model_name, "stream": True,
+                   "files": {gguf_path.rsplit("/", 1)[-1]: f"sha256:{sha}"}}
+        with session.post(f"{OLLAMA_BASE_URL}/api/create", json=payload,
+                          stream=True, timeout=(15, 3600)) as cr:
+            if cr.status_code != 200:
+                raise RuntimeError(f"create HTTP {cr.status_code}: {cr.text[:200]}")
+            for line in cr.iter_lines():
+                if line:
+                    try:
+                        job.update(status=json.loads(line).get("status", job["status"]))
+                    except Exception:
+                        pass
+        job.update(finished=True, status="success", phase="done")
+    except Exception as e:
+        job.update(error=str(e)[:300], finished=True)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _hf_resolve_gguf(name: str) -> Optional[tuple]:
+    path = name[len("hf.co/"):]
+    repo, _, quant = path.partition(":")
+    quant = quant.strip()
+    ggufs = _hf_repo_ggufs(repo)
+    if not ggufs:
+        return None
+
+    def find(q: str):
+        for g in ggufs:
+            if q.lower() in _hf_quant_of(g["file"]).lower():
+                return g
+        return None
+
+    chosen = find(quant) if quant else (find("Q4_K_M") or ggufs[0])
+    if not chosen:
+        return None
+    return repo, chosen["file"], chosen["size_bytes"], _hf_quant_of(chosen["file"])
 
 
 @app.post("/api/models/remove")
